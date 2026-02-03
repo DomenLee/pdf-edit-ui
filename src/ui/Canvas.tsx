@@ -1,19 +1,14 @@
 import { RefObject } from "react";
 import { OverlayLayer } from "../overlay/OverlayLayer";
 
-type CanvasStageProps = {
+type CanvasProps = {
   canvasRef: RefObject<HTMLCanvasElement>;
   status: string;
   width: number;
   height: number;
 };
 
-export const CanvasStage = ({
-  canvasRef,
-  status,
-  width,
-  height,
-}: CanvasStageProps) => {
+export const Canvas = ({ canvasRef, status, width, height }: CanvasProps) => {
   return (
     <section className="canvas-stage">
       <div className="p-4 text-xs text-muted-foreground">{status}</div>

@@ -1,0 +1,38 @@
+export const zhCN = {
+  common: {
+    language: "语言",
+    selectLanguage: "切换语言",
+    zhCN: "简体中文",
+    enUS: "English",
+  },
+  upload: {
+    title: "上传 PDF",
+    description: "选择文件后自动进入编辑页面。",
+    selectFile: "选择 PDF 文件",
+    saving: "正在保存...",
+    errorInvalid: "只支持 PDF 文件，请重新选择。",
+    errorSave: "保存失败，请稍后重试。",
+  },
+  editor: {
+    status: {
+      loading: "加载中...",
+      missingId: "缺少文档 ID。",
+      missingPdf: "未找到对应 PDF。",
+      canvasNotReady: "Canvas 未准备好。",
+      renderComplete: "渲染完成。",
+      renderFailed: "渲染失败。",
+    },
+    sidebar: "侧边栏",
+    propertyPanel: "属性面板",
+    textPlaceholder: "请输入文本",
+  },
+  toolbar: {
+    select: "选择",
+    text: "文本",
+    highlight: "高亮",
+    undo: "撤销",
+    redo: "重做",
+    export: "导出",
+    language: "语言",
+  },
+};
