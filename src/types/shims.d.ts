@@ -38,6 +38,7 @@ declare module "react" {
     currentTarget: T;
     clientX: number;
     clientY: number;
+    stopPropagation: () => void;
   }
 
   export interface ChangeEvent<T = Element> {
@@ -64,6 +65,8 @@ declare module "react" {
     deps: ReadonlyArray<unknown>,
   ): T;
   export function useRef<T>(initial: T): { current: T };
+  export function createContext<T>(defaultValue: T): any;
+  export function useContext<T>(context: any): T;
   export function forwardRef<T, P = {}>(
     render: (props: P, ref: Ref<T>) => ReactNode,
   ): ((props: P & { ref?: Ref<T> }) => ReactNode) & {
@@ -171,6 +174,7 @@ declare module "zustand" {
   export type StoreHook<T> = {
     (): T;
     <U>(selector: (state: T) => U): U;
+    getState: () => T;
   };
 
   export type SetState<T> = (
@@ -239,6 +243,7 @@ declare module "lucide-react" {
   export const Highlighter: any;
   export const MousePointer2: any;
   export const Download: any;
+  export const Languages: any;
 }
 
 declare module "react/jsx-runtime" {

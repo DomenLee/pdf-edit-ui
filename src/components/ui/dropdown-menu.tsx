@@ -26,7 +26,9 @@ export const DropdownMenuTrigger = ({
   asChild?: boolean;
   children: ReactNode;
 }) => {
-  const context = useContext(DropdownMenuContext);
+  const context = useContext(
+    DropdownMenuContext,
+  ) as DropdownMenuContextValue | null;
   if (!context) {
     return null;
   }
@@ -52,7 +54,9 @@ export const DropdownMenuContent = ({
   className?: string;
   align?: "start" | "end";
 }) => {
-  const context = useContext(DropdownMenuContext);
+  const context = useContext(
+    DropdownMenuContext,
+  ) as DropdownMenuContextValue | null;
   const contentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -99,7 +103,9 @@ export const DropdownMenuItem = ({
   className?: string;
   onClick?: () => void;
 }) => {
-  const context = useContext(DropdownMenuContext);
+  const context = useContext(
+    DropdownMenuContext,
+  ) as DropdownMenuContextValue | null;
   return (
     <button
       type="button"
