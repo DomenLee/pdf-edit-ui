@@ -55,14 +55,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   updateOverlay: (id, patch) =>
     set((state) => ({
       overlays: state.overlays.map((item) =>
-        item.id === id ? { ...item, ...patch } : item,
+        item.id === id ? ({ ...item, ...patch } as OverlayItem) : item,
       ),
       history: pushHistory(state.overlays, state.history),
     })),
   updateOverlayLive: (id, patch) =>
     set((state) => ({
       overlays: state.overlays.map((item) =>
-        item.id === id ? { ...item, ...patch } : item,
+        item.id === id ? ({ ...item, ...patch } as OverlayItem) : item,
       ),
     })),
   replaceOverlay: (overlay) =>
