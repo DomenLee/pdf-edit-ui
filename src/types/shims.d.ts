@@ -140,7 +140,11 @@ declare module "pdf-lib" {
 
 declare module "pdfjs-dist" {
   export type PDFPageProxy = {
-    getViewport: (options: { scale: number }) => { width: number; height: number };
+    getViewport: (options: {
+      scale: number;
+      rotation?: number;
+    }) => { width: number; height: number };
+    rotate?: number;
     render: (options: {
       canvasContext: CanvasRenderingContext2D;
       viewport: { width: number; height: number };

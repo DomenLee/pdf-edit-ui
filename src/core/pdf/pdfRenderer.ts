@@ -19,8 +19,14 @@ export const loadPdfPage = async (data: ArrayBuffer, pageNumber = 1) => {
   return page;
 };
 
+const normalizeRotation = (rotation: number) => {
+  const normalized = ((rotation % 360) + 360) % 360;
+  return normalized;
+};
+
 export const getPageViewport = (page: PDFPageProxy, scale: number) => {
-  return page.getViewport({ scale });
+  const rotation = normalizeRotation(page.rotate ?? 0);
+  return page.getViewport({ scale, rotation });
 };
 
 export const renderPage = async (
