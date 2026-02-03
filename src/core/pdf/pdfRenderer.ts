@@ -1,9 +1,19 @@
 import { getDocument, GlobalWorkerOptions, type PDFPageProxy } from "pdfjs-dist";
 
 GlobalWorkerOptions.workerSrc = "/pdf.worker.js";
+const baseUrl = import.meta.env.BASE_URL ?? "/";
+const cMapUrl = `${baseUrl}cmaps/`;
+const standardFontDataUrl = `${baseUrl}standard_fonts/`;
 
 export const loadPdfPage = async (data: ArrayBuffer, pageNumber = 1) => {
-  const loadingTask = getDocument({ data });
+  const loadingTask = getDocument({
+    data,
+    cMapUrl,
+    cMapPacked: true,
+    standardFontDataUrl,
+    enableXfa: true,
+    useSystemFonts: true,
+  });
   const pdf = await loadingTask.promise;
   const page = await pdf.getPage(pageNumber);
   return page;

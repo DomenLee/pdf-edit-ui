@@ -151,6 +151,11 @@ declare module "pdfjs-dist" {
 
   export function getDocument(options: {
     data: ArrayBuffer;
+    cMapUrl?: string;
+    cMapPacked?: boolean;
+    standardFontDataUrl?: string;
+    enableXfa?: boolean;
+    useSystemFonts?: boolean;
   }): {
     promise: Promise<{
       getPage: (pageNumber: number) => Promise<PDFPageProxy>;
