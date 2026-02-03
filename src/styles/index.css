@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --border: 214 32% 91%;
+  --primary: 221 83% 53%;
+  --primary-foreground: 210 40% 98%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --accent: 213 27% 88%;
+  --accent-foreground: 222 47% 11%;
+}
+
+body {
+  @apply bg-background text-foreground;
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+* {
+  @apply border-border;
+}
+
+.editor-shell {
+  @apply h-screen w-screen overflow-hidden bg-background text-foreground;
+}
+
+.editor-layout {
+  @apply grid h-full grid-rows-[auto_1fr];
+}
+
+.editor-body {
+  @apply grid h-full grid-cols-[240px_1fr_280px];
+}
+
+.canvas-stage {
+  @apply relative h-full overflow-auto bg-muted;
+}
+
+.canvas-layer {
+  @apply absolute left-0 top-0;
+}
