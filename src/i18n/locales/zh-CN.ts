@@ -34,7 +34,5 @@ export const zhCN = {
     redo: "重做",
     export: "导出",
     language: "语言",
-    editMode: "进入编辑",
-    doneEditing: "完成编辑",
   },
 };

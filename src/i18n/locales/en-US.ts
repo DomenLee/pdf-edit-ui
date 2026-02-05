@@ -34,7 +34,5 @@ export const enUS = {
     redo: "Redo",
     export: "Export",
     language: "Language",
-    editMode: "Edit PDF",
-    doneEditing: "Done",
   },
 };
