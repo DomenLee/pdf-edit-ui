@@ -350,6 +350,7 @@ export const EditorPage = () => {
             status={t(statusKey)}
             width={pageSize.width}
             height={pageSize.height}
+            zoomPercent={Math.round(pageSize.scale * 100)}
           />
           <PropertyPanel />
         </div>

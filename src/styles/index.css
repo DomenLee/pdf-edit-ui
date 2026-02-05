@@ -47,7 +47,6 @@ body {
 
 .pdf-text-layer {
   @apply absolute left-0 top-0 z-20;
-  color: #111827;
   pointer-events: auto;
   user-select: none;
 }
@@ -63,6 +62,7 @@ body {
 
 .pdf-text-layer span.is-editing {
   user-select: text;
+  outline: none;
 }
 
 .pdf-path-layer {
@@ -76,6 +76,5 @@ body {
 }
 
 .pdf-text-layer span[data-text-id]:hover {
-  outline: 1px solid hsl(var(--primary) / 0.5);
-  background-color: hsl(var(--primary) / 0.1);
+  background-color: transparent;
 }

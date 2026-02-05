@@ -283,6 +283,9 @@ declare module "lucide-react" {
   export const MousePointer2: any;
   export const Download: any;
   export const Languages: any;
+  export const ZoomIn: any;
+  export const ZoomOut: any;
+  export const PencilLine: any;
 }
 
 declare module "react/jsx-runtime" {
