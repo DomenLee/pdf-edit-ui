@@ -49,3 +49,11 @@ body {
   content: attr(data-placeholder);
   @apply text-muted-foreground;
 }
+
+.native-text-hit-area {
+  @apply absolute cursor-text rounded-sm border border-transparent bg-transparent transition-colors;
+}
+
+.native-text-hit-area:hover {
+  @apply border-primary/50 bg-primary/10;
+}

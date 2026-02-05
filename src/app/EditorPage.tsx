@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { getOverlays, getPdfById, saveOverlays } from "../storage/pdfStorage";
-import { loadPdfPage, renderPage } from "../core/pdf/pdfRenderer";
+import { getPageViewport, loadPdfPage, renderPage } from "../core/pdf/pdfRenderer";
 import { Sidebar } from "../ui/Sidebar";
 import { PropertyPanel } from "../ui/PropertyPanel";
 import { Canvas } from "../ui/Canvas";
@@ -9,12 +9,17 @@ import { Toolbar } from "../ui/Toolbar";
 import { useOverlayStore } from "../state/overlayStore";
 import { useI18nStore } from "../i18n/i18nStore";
 import { exportPdf } from "../core/export/pdfExport";
+import { NativeTextBlock } from "../overlay/NativeTextLayer";
+import { useNativeTextStore } from "../state/nativeTextStore";
 
 export const EditorPage = () => {
   const { id } = useParams();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [statusKey, setStatusKey] = useState("editor.status.loading");
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
+  const [nativeTextBlocks, setNativeTextBlocks] = useState<NativeTextBlock[]>(
+    [],
+  );
   const documentId = useMemo(() => id ?? "", [id]);
   const overlays = useOverlayStore((state) => state.overlays);
   const initializeOverlays = useOverlayStore(
@@ -29,6 +34,12 @@ export const EditorPage = () => {
     t: state.t,
     locale: state.locale,
   }));
+  const nativeTextReplacements = useNativeTextStore(
+    (state) => state.nativeTextReplacements,
+  );
+  const setNativeTextReplacements = useNativeTextStore(
+    (state) => state.setNativeTextReplacements,
+  );
 
   useEffect(() => {
     const load = async () => {
@@ -51,8 +62,50 @@ export const EditorPage = () => {
 
       try {
         const page = await loadPdfPage(entry.data, 1);
-        const viewport = await renderPage(page, canvasRef.current, 1.1);
-        setPageSize(viewport);
+        const scale = 1.1;
+        const viewport = getPageViewport(page, scale);
+        const renderResult = await renderPage(page, canvasRef.current, scale);
+        setPageSize(renderResult);
+        const textContent = await (page as any).getTextContent();
+        const items = (textContent.items ?? []) as Array<{
+          str?: string;
+          transform?: number[];
+          width?: number;
+          height?: number;
+        }>;
+        const blocks = items
+          .map((item, index) => {
+            const text = item.str ?? "";
+            if (!text.trim() || !item.transform) {
+              return null;
+            }
+            const [a, b, _c, _d, e, f] = item.transform;
+            const fontSize = Math.max(1, Math.hypot(a, b));
+            const rect = viewport.convertToViewportRectangle?.([
+              e,
+              f,
+              e + (item.width ?? 0),
+              f + (item.height ?? fontSize),
+            ]);
+            if (!rect) {
+              return null;
+            }
+            const [x1, y1, x2, y2] = rect;
+            return {
+              id: `native-text-${index}`,
+              pageIndex: 0,
+              text,
+              bbox: {
+                x: Math.min(x1, x2),
+                y: Math.min(y1, y2),
+                width: Math.abs(x2 - x1),
+                height: Math.abs(y2 - y1),
+              },
+              fontSize,
+            };
+          })
+          .filter(Boolean) as NativeTextBlock[];
+        setNativeTextBlocks(blocks);
         const overlayEntry = await getOverlays(documentId);
         if (overlayEntry) {
           const normalized = overlayEntry.overlays.map((overlay) => {
@@ -78,8 +131,12 @@ export const EditorPage = () => {
             };
           });
           initializeOverlays(normalized);
+          setNativeTextReplacements(
+            overlayEntry.nativeTextReplacements ?? [],
+          );
         } else {
           initializeOverlays([]);
+          setNativeTextReplacements([]);
         }
         setStatusKey("editor.status.renderComplete");
       } catch (error) {
@@ -89,15 +146,15 @@ export const EditorPage = () => {
     };
 
     void load();
-  }, [documentId, initializeOverlays]);
+  }, [documentId, initializeOverlays, setNativeTextReplacements]);
 
   useEffect(() => {
     if (!documentId) {
       return;
     }
     setDocumentId(documentId);
-    void saveOverlays(documentId, overlays);
-  }, [documentId, overlays, setDocumentId]);
+    void saveOverlays(documentId, overlays, nativeTextReplacements);
+  }, [documentId, overlays, nativeTextReplacements, setDocumentId]);
 
   const handleExport = async () => {
     if (!documentId) {
@@ -110,6 +167,7 @@ export const EditorPage = () => {
     await exportPdf({
       data: entry.data,
       overlays,
+      nativeTextReplacements,
       pageSize,
       filename: `${documentId}-edited.pdf`,
     });
@@ -158,6 +216,7 @@ export const EditorPage = () => {
             status={t(statusKey)}
             width={pageSize.width}
             height={pageSize.height}
+            nativeTextBlocks={nativeTextBlocks}
           />
           <PropertyPanel />
         </div>

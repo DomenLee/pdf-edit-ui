@@ -142,15 +142,21 @@ declare module "pdf-lib" {
 }
 
 declare module "pdfjs-dist" {
+  export type PDFViewport = {
+    width: number;
+    height: number;
+    convertToViewportRectangle?: (rect: number[]) => number[];
+  };
+
   export type PDFPageProxy = {
     getViewport: (options: {
       scale: number;
       rotation?: number;
-    }) => { width: number; height: number };
+    }) => PDFViewport;
     rotate?: number;
     render: (options: {
       canvasContext: CanvasRenderingContext2D;
-      viewport: { width: number; height: number };
+      viewport: PDFViewport;
     }) => { promise: Promise<void> };
   };
 

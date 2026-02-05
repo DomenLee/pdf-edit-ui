@@ -17,3 +17,13 @@ export type OverlayObject = {
   content?: string;
   style?: OverlayStyle;
 };
+
+export type NativeTextReplacement = {
+  id: string;
+  type: "native-text-replacement";
+  pageIndex: number;
+  originalText: string;
+  replacementText: string;
+  originalBBox: { x: number; y: number; width: number; height: number };
+  fontSize: number;
+};
