@@ -11,6 +11,51 @@ const baseUrl = import.meta.env.BASE_URL ?? "/";
 const cMapUrl = `${baseUrl}cmaps/`;
 const standardFontDataUrl = `${baseUrl}standard_fonts/`;
 
+type Matrix = [number, number, number, number, number, number];
+type RgbColor = { r: number; g: number; b: number };
+type GraphicsState = {
+  strokeColor: RgbColor;
+  fillColor: RgbColor;
+  lineWidth: number;
+  ctm: Matrix;
+};
+
+const IDENTITY_MATRIX: Matrix = [1, 0, 0, 1, 0, 0];
+const DEFAULT_STROKE: RgbColor = { r: 0, g: 0, b: 0 };
+const DEFAULT_FILL: RgbColor = { r: 0, g: 0, b: 0 };
+
+const clamp = (value: number) => Math.max(0, Math.min(1, value));
+
+const multiplyMatrix = (m1: Matrix, m2: Matrix): Matrix => [
+  m1[0] * m2[0] + m1[2] * m2[1],
+  m1[1] * m2[0] + m1[3] * m2[1],
+  m1[0] * m2[2] + m1[2] * m2[3],
+  m1[1] * m2[2] + m1[3] * m2[3],
+  m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+  m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+];
+
+const applyMatrix = (m: Matrix, x: number, y: number) => ({
+  x: m[0] * x + m[2] * y + m[4],
+  y: m[1] * x + m[3] * y + m[5],
+});
+
+const matrixScale = (m: Matrix) => Math.sqrt(Math.max(1e-6, Math.abs(m[0] * m[3] - m[1] * m[2])));
+
+const rgbCss = ({ r, g, b }: RgbColor) =>
+  `rgb(${Math.round(clamp(r) * 255)},${Math.round(clamp(g) * 255)},${Math.round(clamp(b) * 255)})`;
+
+const cmykToRgb = (c: number, m: number, y: number, k: number): RgbColor => ({
+  r: clamp(1 - Math.min(1, c + k)),
+  g: clamp(1 - Math.min(1, m + k)),
+  b: clamp(1 - Math.min(1, y + k)),
+});
+
+const normalizeRotation = (rotation: number) => {
+  const normalized = ((rotation % 360) + 360) % 360;
+  return normalized;
+};
+
 export const loadPdfPage = async (data: ArrayBuffer, pageNumber = 1) => {
   const loadingTask = getDocument({
     data,
@@ -23,11 +68,6 @@ export const loadPdfPage = async (data: ArrayBuffer, pageNumber = 1) => {
   const pdf = await loadingTask.promise;
   const page = await pdf.getPage(pageNumber);
   return page;
-};
-
-const normalizeRotation = (rotation: number) => {
-  const normalized = ((rotation % 360) + 360) % 360;
-  return normalized;
 };
 
 export const getPageViewport = (page: PDFPageProxy, scale: number) => {
@@ -76,250 +116,308 @@ export const renderTextLayerForPage = async (
   }
 };
 
-
-const createSvgLine = (
+const buildSvgPathElement = (
   svg: SVGElement,
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
+  d: string,
+  mode: "stroke" | "fill" | "fillStroke",
+  state: GraphicsState,
+  viewportMatrix: Matrix,
 ) => {
-  const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-  line.setAttribute("x1", `${x1}`);
-  line.setAttribute("y1", `${y1}`);
-  line.setAttribute("x2", `${x2}`);
-  line.setAttribute("y2", `${y2}`);
-  line.setAttribute("stroke", "#000");
-  line.setAttribute("stroke-width", "1");
-  svg.appendChild(line);
+  if (!d.trim()) {
+    return;
+  }
+
+  const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  pathEl.setAttribute("d", d.trim());
+
+  const combined = multiplyMatrix(viewportMatrix, state.ctm);
+  pathEl.setAttribute("transform", `matrix(${combined.join(" ")})`);
+
+  const strokeWidth = Math.max(0.1, state.lineWidth * matrixScale(combined));
+  pathEl.setAttribute("stroke-width", `${strokeWidth}`);
+
+  if (mode === "stroke") {
+    pathEl.setAttribute("fill", "none");
+    pathEl.setAttribute("stroke", rgbCss(state.strokeColor));
+  } else if (mode === "fill") {
+    pathEl.setAttribute("fill", rgbCss(state.fillColor));
+    pathEl.setAttribute("stroke", "none");
+  } else {
+    pathEl.setAttribute("fill", rgbCss(state.fillColor));
+    pathEl.setAttribute("stroke", rgbCss(state.strokeColor));
+  }
+
+  svg.appendChild(pathEl);
 };
 
-const drawInvoiceStructure = (
-  svg: SVGElement,
-  pathLayer: HTMLDivElement,
-  textLayer?: HTMLDivElement,
-) => {
-  const width = pathLayer.clientWidth;
-  const height = pathLayer.clientHeight;
-  if (!width || !height) {
-    return;
+const resolveImageDataUrl = async (page: any, objectId: string) => {
+  const fromObj = page?.objs?.get?.(objectId) ?? page?.commonObjs?.get?.(objectId);
+  if (!fromObj) {
+    return null;
   }
 
-  const border = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-  border.setAttribute("x", "1");
-  border.setAttribute("y", "1");
-  border.setAttribute("width", `${Math.max(0, width - 2)}`);
-  border.setAttribute("height", `${Math.max(0, height - 2)}`);
-  border.setAttribute("fill", "none");
-  border.setAttribute("stroke", "#000");
-  border.setAttribute("stroke-width", "1");
-  svg.appendChild(border);
+  const imageData = fromObj.data ?? fromObj;
+  const width = imageData.width;
+  const height = imageData.height;
+  const pixels = imageData.data;
 
-  if (!textLayer) {
-    return;
+  if (!width || !height || !pixels) {
+    return null;
   }
 
-  const spans = Array.from(textLayer.querySelectorAll("span"));
-  if (!spans.length) {
-    return;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return null;
   }
 
-  const layerRect = textLayer.getBoundingClientRect();
-  const headers = ["项目名称", "货物或应税劳务、服务名称", "单价", "数量", "金额", "税率", "税额"];
-  const headerSpans = spans.filter((span) => {
-    const text = (span.textContent ?? "").replace(/\s+/g, "");
-    return headers.some((label) => text.includes(label));
-  });
-
-  if (!headerSpans.length) {
-    return;
+  const imageBuffer =
+    pixels instanceof Uint8ClampedArray ? pixels : new Uint8ClampedArray(pixels.buffer ?? pixels);
+  if (imageBuffer.length < width * height * 4) {
+    return null;
   }
 
-  const headerRects = headerSpans.map((span) => span.getBoundingClientRect());
-  const tableLeft = Math.max(1, Math.min(...headerRects.map((rect) => rect.left - layerRect.left)) - 8);
-  const tableRight = Math.min(
-    width - 1,
-    Math.max(...headerRects.map((rect) => rect.right - layerRect.left)) + 8,
-  );
-  const headerBottom = Math.max(...headerRects.map((rect) => rect.bottom - layerRect.top));
-
-  const totalSpan = spans.find((span) => {
-    const text = (span.textContent ?? "").replace(/\s+/g, "");
-    return text.includes("合计") || text.includes("价税合计");
-  });
-
-  const totalTop = totalSpan
-    ? totalSpan.getBoundingClientRect().top - layerRect.top
-    : Math.min(height - 4, headerBottom + 220);
-
-  createSvgLine(svg, tableLeft, headerBottom + 2, tableRight, headerBottom + 2);
-
-  const rowSpans = spans.filter((span) => {
-    const rect = span.getBoundingClientRect();
-    const top = rect.top - layerRect.top;
-    const left = rect.left - layerRect.left;
-    const right = rect.right - layerRect.left;
-    return top > headerBottom + 3 && top < totalTop - 2 && right > tableLeft && left < tableRight;
-  });
-
-  const rowBottoms = rowSpans
-    .map((span) => span.getBoundingClientRect().bottom - layerRect.top)
-    .sort((a, b) => a - b);
-
-  const groupedBottoms: number[] = [];
-  rowBottoms.forEach((value) => {
-    const last = groupedBottoms[groupedBottoms.length - 1];
-    if (last === undefined || Math.abs(last - value) > 7) {
-      groupedBottoms.push(value);
-    }
-  });
-
-  groupedBottoms.forEach((lineY) => {
-    if (lineY < totalTop - 4) {
-      createSvgLine(svg, tableLeft, lineY + 2, tableRight, lineY + 2);
-    }
-  });
-
-  const totalLineY = Math.max(headerBottom + 6, totalTop - 2);
-  createSvgLine(svg, tableLeft, totalLineY, tableRight, totalLineY);
+  const img = new ImageData(imageBuffer, width, height);
+  ctx.putImageData(img, 0, 0);
+  return canvas.toDataURL("image/png");
 };
 
 export const renderPathLayerForPage = async (
   page: PDFPageProxy,
   container: HTMLDivElement,
   scale = 1.2,
-  textLayer?: HTMLDivElement,
 ) => {
   const viewport = getPageViewport(page, scale);
   container.innerHTML = "";
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("width", `${viewport.width}`);
-  svg.setAttribute("height", `${viewport.height}`);
-  svg.setAttribute("viewBox", `0 0 ${viewport.width} ${viewport.height}`);
-  svg.style.position = "absolute";
-  svg.style.left = "0";
-  svg.style.top = "0";
+  container.style.width = `${viewport.width}px`;
+  container.style.height = `${viewport.height}px`;
 
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", "100%");
+  svg.setAttribute("height", "100%");
+  svg.setAttribute("viewBox", `0 0 ${viewport.width} ${viewport.height}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.style.position = "absolute";
+  svg.style.inset = "0";
+
+  const viewportMatrix = (viewport as any).transform as Matrix;
   const opList = await (page as any).getOperatorList();
   const fnArray = opList?.fnArray ?? [];
   const argsArray = opList?.argsArray ?? [];
 
-  let path = "";
-  let strokeColor = "rgba(17,24,39,0.4)";
-  let fillColor = "rgba(17,24,39,0.15)";
-  let lineWidth = 1;
+  let state: GraphicsState = {
+    strokeColor: { ...DEFAULT_STROKE },
+    fillColor: { ...DEFAULT_FILL },
+    lineWidth: 1,
+    ctm: [...IDENTITY_MATRIX],
+  };
+  const stateStack: GraphicsState[] = [];
 
-  const flushPath = (mode: "stroke" | "fill") => {
-    if (!path) {
-      return;
-    }
-    const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    pathEl.setAttribute("d", path);
-    if (mode === "stroke") {
-      pathEl.setAttribute("fill", "none");
-      pathEl.setAttribute("stroke", strokeColor);
-      pathEl.setAttribute("stroke-width", `${lineWidth}`);
-    } else {
-      pathEl.setAttribute("fill", fillColor);
-      pathEl.setAttribute("stroke", "none");
-    }
-    svg.appendChild(pathEl);
+  let path = "";
+  let currentX = 0;
+  let currentY = 0;
+
+  const flush = (mode: "stroke" | "fill" | "fillStroke") => {
+    buildSvgPathElement(svg, path, mode, state, viewportMatrix);
     path = "";
   };
 
-  const toViewportPoint = (x: number, y: number) => {
-    const point = viewport.convertToViewportPoint?.(x, y);
-    return point ? { x: point[0], y: point[1] } : { x, y };
-  };
+  const opSave = (OPS as any).save;
+  const opRestore = (OPS as any).restore;
+  const opTransform = (OPS as any).transform;
+  const opSetStrokeRGB = (OPS as any).setStrokeRGBColor;
+  const opSetFillRGB = (OPS as any).setFillRGBColor;
+  const opSetStrokeGray = (OPS as any).setStrokeGray;
+  const opSetFillGray = (OPS as any).setFillGray;
+  const opSetStrokeCMYK = (OPS as any).setStrokeCMYKColor;
+  const opSetFillCMYK = (OPS as any).setFillCMYKColor;
+  const opSetLineWidth = (OPS as any).setLineWidth;
+  const opMoveTo = (OPS as any).moveTo;
+  const opLineTo = (OPS as any).lineTo;
+  const opCurveTo = (OPS as any).curveTo;
+  const opCurveTo2 = (OPS as any).curveTo2;
+  const opCurveTo3 = (OPS as any).curveTo3;
+  const opClosePath = (OPS as any).closePath;
+  const opRectangle = (OPS as any).rectangle;
+  const opStroke = (OPS as any).stroke;
+  const opCloseStroke = (OPS as any).closeStroke;
+  const opFill = (OPS as any).fill;
+  const opEoFill = (OPS as any).eoFill;
+  const opFillStroke = (OPS as any).fillStroke;
+  const opEoFillStroke = (OPS as any).eoFillStroke;
+  const opCloseFillStroke = (OPS as any).closeFillStroke;
+  const opCloseEoFillStroke = (OPS as any).closeEOFillStroke;
+  const opPaintImage = (OPS as any).paintImageXObject;
+  const opPaintJpeg = (OPS as any).paintJpegXObject;
 
   for (let i = 0; i < fnArray.length; i += 1) {
     const fn = fnArray[i];
     const args = argsArray[i] ?? [];
-    switch (fn) {
-      case OPS.setStrokeRGBColor: {
-        const [r, g, b] = args;
-        strokeColor = `rgba(${Math.round(r * 255)}, ${Math.round(
-          g * 255,
-        )}, ${Math.round(b * 255)}, 0.5)`;
-        break;
+
+    if (fn === opSave) {
+      stateStack.push({
+        strokeColor: { ...state.strokeColor },
+        fillColor: { ...state.fillColor },
+        lineWidth: state.lineWidth,
+        ctm: [...state.ctm],
+      });
+      continue;
+    }
+
+    if (fn === opRestore) {
+      const previous = stateStack.pop();
+      if (previous) {
+        state = previous;
       }
-      case OPS.setFillRGBColor: {
-        const [r, g, b] = args;
-        fillColor = `rgba(${Math.round(r * 255)}, ${Math.round(
-          g * 255,
-        )}, ${Math.round(b * 255)}, 0.2)`;
-        break;
+      continue;
+    }
+
+    if (fn === opTransform) {
+      const [a, b, c, d, e, f] = args;
+      state = {
+        ...state,
+        ctm: multiplyMatrix(state.ctm, [a, b, c, d, e, f]),
+      };
+      continue;
+    }
+
+    if (fn === opSetStrokeRGB) {
+      const [r, g, b] = args;
+      state = { ...state, strokeColor: { r: clamp(r), g: clamp(g), b: clamp(b) } };
+      continue;
+    }
+
+    if (fn === opSetFillRGB) {
+      const [r, g, b] = args;
+      state = { ...state, fillColor: { r: clamp(r), g: clamp(g), b: clamp(b) } };
+      continue;
+    }
+
+    if (fn === opSetStrokeGray) {
+      const [g] = args;
+      state = { ...state, strokeColor: { r: clamp(g), g: clamp(g), b: clamp(g) } };
+      continue;
+    }
+
+    if (fn === opSetFillGray) {
+      const [g] = args;
+      state = { ...state, fillColor: { r: clamp(g), g: clamp(g), b: clamp(g) } };
+      continue;
+    }
+
+    if (fn === opSetStrokeCMYK) {
+      const [c, m, y, k] = args;
+      state = { ...state, strokeColor: cmykToRgb(c, m, y, k) };
+      continue;
+    }
+
+    if (fn === opSetFillCMYK) {
+      const [c, m, y, k] = args;
+      state = { ...state, fillColor: cmykToRgb(c, m, y, k) };
+      continue;
+    }
+
+    if (fn === opSetLineWidth) {
+      state = { ...state, lineWidth: Number(args[0] ?? 1) || 1 };
+      continue;
+    }
+
+    if (fn === opMoveTo) {
+      const [x, y] = args;
+      currentX = x;
+      currentY = y;
+      path += `M ${x} ${y} `;
+      continue;
+    }
+
+    if (fn === opLineTo) {
+      const [x, y] = args;
+      currentX = x;
+      currentY = y;
+      path += `L ${x} ${y} `;
+      continue;
+    }
+
+    if (fn === opCurveTo) {
+      const [x1, y1, x2, y2, x3, y3] = args;
+      currentX = x3;
+      currentY = y3;
+      path += `C ${x1} ${y1} ${x2} ${y2} ${x3} ${y3} `;
+      continue;
+    }
+
+    if (fn === opCurveTo2) {
+      const [x2, y2, x3, y3] = args;
+      path += `C ${currentX} ${currentY} ${x2} ${y2} ${x3} ${y3} `;
+      currentX = x3;
+      currentY = y3;
+      continue;
+    }
+
+    if (fn === opCurveTo3) {
+      const [x1, y1, x3, y3] = args;
+      path += `C ${x1} ${y1} ${x3} ${y3} ${x3} ${y3} `;
+      currentX = x3;
+      currentY = y3;
+      continue;
+    }
+
+    if (fn === opRectangle) {
+      const [x, y, w, h] = args;
+      path += `M ${x} ${y} L ${x + w} ${y} L ${x + w} ${y + h} L ${x} ${y + h} Z `;
+      currentX = x;
+      currentY = y;
+      continue;
+    }
+
+    if (fn === opClosePath) {
+      path += "Z ";
+      continue;
+    }
+
+    if (fn === opStroke || fn === opCloseStroke) {
+      flush("stroke");
+      continue;
+    }
+
+    if (fn === opFill || fn === opEoFill) {
+      flush("fill");
+      continue;
+    }
+
+    if (
+      fn === opFillStroke ||
+      fn === opEoFillStroke ||
+      fn === opCloseFillStroke ||
+      fn === opCloseEoFillStroke
+    ) {
+      flush("fillStroke");
+      continue;
+    }
+
+    if (fn === opPaintImage || fn === opPaintJpeg) {
+      const objectId = String(args[0] ?? "");
+      const dataUrl = await resolveImageDataUrl(page, objectId);
+      if (!dataUrl) {
+        continue;
       }
-      case OPS.setLineWidth: {
-        lineWidth = args[0] ?? 1;
-        break;
-      }
-      case OPS.moveTo: {
-        const [x, y] = args;
-        const p = toViewportPoint(x, y);
-        path += `M ${p.x} ${p.y} `;
-        break;
-      }
-      case OPS.lineTo: {
-        const [x, y] = args;
-        const p = toViewportPoint(x, y);
-        path += `L ${p.x} ${p.y} `;
-        break;
-      }
-      case OPS.curveTo: {
-        const [x1, y1, x2, y2, x3, y3] = args;
-        const p1 = toViewportPoint(x1, y1);
-        const p2 = toViewportPoint(x2, y2);
-        const p3 = toViewportPoint(x3, y3);
-        path += `C ${p1.x} ${p1.y} ${p2.x} ${p2.y} ${p3.x} ${p3.y} `;
-        break;
-      }
-      case OPS.curveTo2: {
-        const [x2, y2, x3, y3] = args;
-        const p2 = toViewportPoint(x2, y2);
-        const p3 = toViewportPoint(x3, y3);
-        path += `Q ${p2.x} ${p2.y} ${p3.x} ${p3.y} `;
-        break;
-      }
-      case OPS.curveTo3: {
-        const [x1, y1, x3, y3] = args;
-        const p1 = toViewportPoint(x1, y1);
-        const p3 = toViewportPoint(x3, y3);
-        path += `Q ${p1.x} ${p1.y} ${p3.x} ${p3.y} `;
-        break;
-      }
-      case OPS.rectangle: {
-        const [x, y, w, h] = args;
-        const p1 = toViewportPoint(x, y);
-        const p2 = toViewportPoint(x + w, y + h);
-        const rx = Math.min(p1.x, p2.x);
-        const ry = Math.min(p1.y, p2.y);
-        const rw = Math.abs(p2.x - p1.x);
-        const rh = Math.abs(p2.y - p1.y);
-        path += `M ${rx} ${ry} h ${rw} v ${rh} h ${-rw} Z `;
-        break;
-      }
-      case OPS.closePath:
-        path += "Z ";
-        break;
-      case OPS.stroke:
-      case OPS.closeStroke:
-        flushPath("stroke");
-        break;
-      case OPS.fill:
-      case OPS.eoFill:
-      case OPS.fillStroke:
-      case OPS.eoFillStroke:
-      case OPS.closeFillStroke:
-      case OPS.closeEOFillStroke:
-        flushPath("fill");
-        break;
-      default:
-        break;
+
+      const imageNode = document.createElementNS("http://www.w3.org/2000/svg", "image");
+      const ctm = multiplyMatrix(viewportMatrix, state.ctm);
+      imageNode.setAttributeNS("http://www.w3.org/1999/xlink", "href", dataUrl);
+      imageNode.setAttribute("x", "0");
+      imageNode.setAttribute("y", "-1");
+      imageNode.setAttribute("width", "1");
+      imageNode.setAttribute("height", "1");
+      imageNode.setAttribute("preserveAspectRatio", "none");
+      imageNode.setAttribute("transform", `matrix(${ctm.join(" ")})`);
+      svg.appendChild(imageNode);
+      continue;
     }
   }
 
-  drawInvoiceStructure(svg, container, textLayer);
   container.appendChild(svg);
 };
 
