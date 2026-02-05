@@ -86,6 +86,17 @@ body {
   outline: none;
 }
 
+
+.pdf-text-layer span[data-text-role="template"] {
+  user-select: none;
+  pointer-events: none;
+}
+
+.pdf-text-layer span[data-text-role="data"] {
+  user-select: text;
+  pointer-events: auto;
+}
+
 .pdf-path-layer {
   @apply absolute left-0 top-0;
   z-index: 12;

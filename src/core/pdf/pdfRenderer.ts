@@ -51,6 +51,96 @@ const cmykToRgb = (c: number, m: number, y: number, k: number): RgbColor => ({
   b: clamp(1 - Math.min(1, y + k)),
 });
 
+
+const INVOICE_LABEL_HINTS = [
+  "发票",
+  "名称",
+  "代码",
+  "号码",
+  "日期",
+  "税",
+  "金额",
+  "价税",
+  "购",
+  "销",
+  "地址",
+  "电话",
+  "开户",
+  "账号",
+  "备注",
+  "规格",
+  "单位",
+  "数量",
+  "单价",
+  "税率",
+  "价款",
+  "合计",
+  "小写",
+  "大写",
+  "机器",
+  "校验",
+  "收款",
+  "复核",
+  "开票",
+  "buyer",
+  "seller",
+  "invoice",
+  "date",
+  "amount",
+  "tax",
+  "total",
+];
+
+const isLikelyDataText = (rawText: string) => {
+  const text = rawText.trim();
+  if (!text) {
+    return false;
+  }
+
+  if (/\d/.test(text)) {
+    return true;
+  }
+
+  if (/[$¥€£]/.test(text)) {
+    return true;
+  }
+
+  if (/^[A-Z0-9\-_/.:]{6,}$/i.test(text)) {
+    return true;
+  }
+
+  if (/[:：]$/.test(text)) {
+    return false;
+  }
+
+  const normalized = text.toLowerCase();
+  if (INVOICE_LABEL_HINTS.some((hint) => normalized.includes(hint))) {
+    return false;
+  }
+
+  if (/^[一-龥]{1,8}$/.test(text)) {
+    return false;
+  }
+
+  return text.length > 8;
+};
+
+const sampleColorAtPoint = (
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+): [number, number, number] | null => {
+  const cx = Math.floor(Math.max(0, Math.min(context.canvas.width - 1, x)));
+  const cy = Math.floor(Math.max(0, Math.min(context.canvas.height - 1, y)));
+
+  try {
+    const { data } = context.getImageData(cx, cy, 1, 1);
+    return [data[0], data[1], data[2]];
+  } catch {
+    return null;
+  }
+};
+
 const normalizeRotation = (rotation: number) => {
   const normalized = ((rotation % 360) + 360) % 360;
   return normalized;
@@ -180,6 +270,9 @@ export const renderTextLayerForPage = async (
     textDiv.style.textShadow = "0 0 0 #fff, 0 0 1px #fff, 0 0 2px #fff";
     textDiv.style.outline = "none";
 
+    const textRole = isLikelyDataText(textDiv.textContent ?? "") ? "data" : "template";
+    textDiv.dataset.textRole = textRole;
+
     if (!colorSourceContext) {
       return;
     }
@@ -189,16 +282,17 @@ export const renderTextLayerForPage = async (
       return;
     }
 
-    const sampleX = Math.floor(Math.max(0, Math.min(colorSourceContext.canvas.width - 1, rect.left - containerRect.left + rect.width / 2)));
-    const sampleY = Math.floor(Math.max(0, Math.min(colorSourceContext.canvas.height - 1, rect.top - containerRect.top + rect.height / 2)));
+    const sampleX = rect.left - containerRect.left + rect.width / 2;
+    const sampleY = rect.top - containerRect.top + rect.height / 2;
+    const sampled = sampleColorAtPoint(colorSourceContext, sampleX, sampleY) ??
+      sampleColorAtPoint(colorSourceContext, sampleX - 1, sampleY) ??
+      sampleColorAtPoint(colorSourceContext, sampleX + 1, sampleY) ??
+      sampleColorAtPoint(colorSourceContext, sampleX, sampleY - 1) ??
+      sampleColorAtPoint(colorSourceContext, sampleX, sampleY + 1) ??
+      [17, 24, 39];
 
-    try {
-      const { data } = colorSourceContext.getImageData(sampleX, sampleY, 1, 1);
-      textDiv.style.color = `rgb(${data[0]}, ${data[1]}, ${data[2]})`;
-      textDiv.style.caretColor = `rgb(${data[0]}, ${data[1]}, ${data[2]})`;
-    } catch (error) {
-      // ignore sampling failures, keep default text color
-    }
+    textDiv.style.color = `rgb(${sampled[0]}, ${sampled[1]}, ${sampled[2]})`;
+    textDiv.style.caretColor = `rgb(${sampled[0]}, ${sampled[1]}, ${sampled[2]})`;
   });
 };
 

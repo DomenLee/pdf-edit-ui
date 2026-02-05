@@ -86,7 +86,11 @@ export const EditorPage = () => {
           if (!span.dataset.originalText) {
             span.dataset.originalText = span.textContent ?? "";
           }
-          span.contentEditable = "true";
+
+          const role = span.dataset.textRole === "data" ? "data" : "template";
+          span.dataset.textRole = role;
+          span.contentEditable = role === "data" ? "true" : "false";
+          span.classList.toggle("is-template-text", role === "template");
         });
         const overlayEntry = await getOverlays(documentId);
         if (overlayEntry) {
