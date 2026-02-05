@@ -13,6 +13,22 @@ const standardFontDataUrl = `${baseUrl}standard_fonts/`;
 
 type Matrix = [number, number, number, number, number, number];
 type RgbColor = { r: number; g: number; b: number };
+type ColorSource =
+  | "DeviceRGB"
+  | "DeviceGray"
+  | "DeviceCMYK"
+  | "ICCBased"
+  | "Separation"
+  | "DeviceN"
+  | "Pattern"
+  | "Unknown";
+type SemanticTextColor = {
+  fillColorRGB: RgbColor;
+  fillColorSource: ColorSource;
+};
+type SemanticTextRun = SemanticTextColor & {
+  text: string;
+};
 type GraphicsState = {
   strokeColor: RgbColor;
   fillColor: RgbColor;
@@ -51,6 +67,279 @@ const cmykToRgb = (c: number, m: number, y: number, k: number): RgbColor => ({
   b: clamp(1 - Math.min(1, y + k)),
 });
 
+const clampColorByte = (value: number) => Math.max(0, Math.min(255, Math.round(value)));
+
+const toByteRgb = ({ r, g, b }: RgbColor): RgbColor => ({
+  r: clampColorByte(clamp(r) * 255),
+  g: clampColorByte(clamp(g) * 255),
+  b: clampColorByte(clamp(b) * 255),
+});
+
+const normalizeColorSpaceName = (value: unknown): string => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const maybeName = (value as { name?: unknown }).name;
+    if (typeof maybeName === "string") {
+      return maybeName;
+    }
+  }
+  return "";
+};
+
+const resolveColorSource = (value: unknown): ColorSource => {
+  const name = normalizeColorSpaceName(value);
+  if (/DeviceRGB/i.test(name)) return "DeviceRGB";
+  if (/DeviceGray/i.test(name)) return "DeviceGray";
+  if (/DeviceCMYK/i.test(name)) return "DeviceCMYK";
+  if (/ICCBased/i.test(name)) return "ICCBased";
+  if (/Separation/i.test(name)) return "Separation";
+  if (/DeviceN/i.test(name)) return "DeviceN";
+  if (/Pattern/i.test(name)) return "Pattern";
+  return "Unknown";
+};
+
+const convertPdfColorToRgb = (
+  source: ColorSource,
+  components: number[],
+  iccComponents = 3,
+): RgbColor => {
+  if (source === "DeviceRGB") {
+    return toByteRgb({
+      r: components[0] ?? 0,
+      g: components[1] ?? 0,
+      b: components[2] ?? 0,
+    });
+  }
+
+  if (source === "DeviceGray") {
+    const g = clamp(components[0] ?? 0);
+    return toByteRgb({ r: g, g, b: g });
+  }
+
+  if (source === "DeviceCMYK") {
+    return toByteRgb(cmykToRgb(
+      components[0] ?? 0,
+      components[1] ?? 0,
+      components[2] ?? 0,
+      components[3] ?? 0,
+    ));
+  }
+
+  if (source === "ICCBased") {
+    if (iccComponents <= 1) {
+      const g = clamp(components[0] ?? 0);
+      return toByteRgb({ r: g, g, b: g });
+    }
+    if (iccComponents === 3) {
+      return toByteRgb({
+        r: components[0] ?? 0,
+        g: components[1] ?? 0,
+        b: components[2] ?? 0,
+      });
+    }
+    if (iccComponents >= 4) {
+      return toByteRgb(cmykToRgb(
+        components[0] ?? 0,
+        components[1] ?? 0,
+        components[2] ?? 0,
+        components[3] ?? 0,
+      ));
+    }
+  }
+
+  return { r: 17, g: 24, b: 39 };
+};
+
+const glyphObjectToUnicode = (glyph: unknown): string => {
+  if (!glyph || typeof glyph !== "object") {
+    return "";
+  }
+  const unicode = (glyph as { unicode?: unknown }).unicode;
+  return typeof unicode === "string" ? unicode : "";
+};
+
+const getTextFromShowTextArgs = (fn: number, args: any[]): string => {
+  const opShowText = (OPS as any).showText;
+  const opShowSpacedText = (OPS as any).showSpacedText;
+  const opNextLineShowText = (OPS as any).nextLineShowText;
+  const opNextLineSetSpacingShowText = (OPS as any).nextLineSetSpacingShowText;
+
+  if (fn === opShowText) {
+    const glyphs = Array.isArray(args[0]) ? args[0] : [];
+    return glyphs.map(glyphObjectToUnicode).join("");
+  }
+
+  if (fn === opShowSpacedText) {
+    const chunks = Array.isArray(args[0]) ? args[0] : [];
+    return chunks
+      .filter((chunk) => typeof chunk === "object")
+      .map(glyphObjectToUnicode)
+      .join("");
+  }
+
+  if (fn === opNextLineShowText) {
+    const glyphs = Array.isArray(args[0]) ? args[0] : [];
+    return glyphs.map(glyphObjectToUnicode).join("");
+  }
+
+  if (fn === opNextLineSetSpacingShowText) {
+    const glyphs = Array.isArray(args[2]) ? args[2] : [];
+    return glyphs.map(glyphObjectToUnicode).join("");
+  }
+
+  return "";
+};
+
+const extractSemanticTextRuns = async (page: PDFPageProxy): Promise<SemanticTextRun[]> => {
+  const opList = await (page as any).getOperatorList({
+    intent: "display",
+    annotationMode: 0,
+  });
+
+  const fnArray = opList?.fnArray ?? [];
+  const argsArray = opList?.argsArray ?? [];
+
+  const opSave = (OPS as any).save;
+  const opRestore = (OPS as any).restore;
+  const opSetFillColorSpace = (OPS as any).setFillColorSpace;
+  const opSetFillRGB = (OPS as any).setFillRGBColor;
+  const opSetFillGray = (OPS as any).setFillGray;
+  const opSetFillCMYK = (OPS as any).setFillCMYKColor;
+  const opSetFillColor = (OPS as any).setFillColor;
+  const opSetFillColorN = (OPS as any).setFillColorN;
+  const opShowText = (OPS as any).showText;
+  const opShowSpacedText = (OPS as any).showSpacedText;
+  const opNextLineShowText = (OPS as any).nextLineShowText;
+  const opNextLineSetSpacingShowText = (OPS as any).nextLineSetSpacingShowText;
+
+  const semanticRuns: SemanticTextRun[] = [];
+  let currentColorSource: ColorSource = "DeviceGray";
+  let currentColorComponents: number[] = [0];
+  let currentICCComponents = 3;
+
+  type ColorState = {
+    currentColorSource: ColorSource;
+    currentColorComponents: number[];
+    currentICCComponents: number;
+  };
+  const colorStateStack: ColorState[] = [];
+
+  for (let i = 0; i < fnArray.length; i += 1) {
+    const fn = fnArray[i];
+    const args = argsArray[i] ?? [];
+
+    if (fn === opSave) {
+      colorStateStack.push({
+        currentColorSource,
+        currentColorComponents: [...currentColorComponents],
+        currentICCComponents,
+      });
+      continue;
+    }
+
+    if (fn === opRestore) {
+      const prev = colorStateStack.pop();
+      if (prev) {
+        currentColorSource = prev.currentColorSource;
+        currentColorComponents = prev.currentColorComponents;
+        currentICCComponents = prev.currentICCComponents;
+      }
+      continue;
+    }
+
+    if (fn === opSetFillColorSpace) {
+      currentColorSource = resolveColorSource(args[0]);
+      if (currentColorSource === "ICCBased") {
+        const maybeNumComps = Number((args[0] as { numComps?: unknown })?.numComps ?? 3);
+        currentICCComponents = Number.isFinite(maybeNumComps) ? maybeNumComps : 3;
+      }
+      continue;
+    }
+
+    if (fn === opSetFillRGB) {
+      currentColorSource = "DeviceRGB";
+      currentColorComponents = [args[0] ?? 0, args[1] ?? 0, args[2] ?? 0];
+      continue;
+    }
+
+    if (fn === opSetFillGray) {
+      currentColorSource = "DeviceGray";
+      currentColorComponents = [args[0] ?? 0];
+      continue;
+    }
+
+    if (fn === opSetFillCMYK) {
+      currentColorSource = "DeviceCMYK";
+      currentColorComponents = [args[0] ?? 0, args[1] ?? 0, args[2] ?? 0, args[3] ?? 0];
+      continue;
+    }
+
+    if (fn === opSetFillColor || fn === opSetFillColorN) {
+      currentColorComponents = Array.isArray(args) ? args.map((v) => Number(v) || 0) : [0];
+      continue;
+    }
+
+    if (
+      fn === opShowText ||
+      fn === opShowSpacedText ||
+      fn === opNextLineShowText ||
+      fn === opNextLineSetSpacingShowText
+    ) {
+      const text = getTextFromShowTextArgs(fn, args);
+      if (!text) {
+        continue;
+      }
+
+      semanticRuns.push({
+        text,
+        fillColorSource: currentColorSource,
+        fillColorRGB: convertPdfColorToRgb(
+          currentColorSource,
+          currentColorComponents,
+          currentICCComponents,
+        ),
+      });
+    }
+  }
+
+  return semanticRuns;
+};
+
+const mapTextDivColors = (textDivs: HTMLElement[], semanticRuns: SemanticTextRun[]): SemanticTextColor[] => {
+  const mapped: SemanticTextColor[] = [];
+  let runIndex = 0;
+  let runOffset = 0;
+
+  for (const textDiv of textDivs) {
+    const text = textDiv.textContent ?? "";
+    const textLen = text.length;
+
+    while (runIndex < semanticRuns.length && runOffset >= semanticRuns[runIndex].text.length) {
+      runIndex += 1;
+      runOffset = 0;
+    }
+
+    const currentRun = semanticRuns[runIndex];
+    if (!currentRun) {
+      mapped.push({
+        fillColorSource: "Unknown",
+        fillColorRGB: { r: 17, g: 24, b: 39 },
+      });
+      continue;
+    }
+
+    mapped.push({
+      fillColorSource: currentRun.fillColorSource,
+      fillColorRGB: currentRun.fillColorRGB,
+    });
+
+    runOffset += Math.max(1, textLen);
+  }
+
+  return mapped;
+};
 const TEMPLATE_RED = "#b00000";
 const DATA_BLACK = "#000000";
 const SECONDARY_GRAY = "#666666";
@@ -127,22 +416,6 @@ const isLikelyDataText = (rawText: string) => {
   }
 
   return text.length > 8;
-};
-
-const sampleColorAtPoint = (
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-): [number, number, number] | null => {
-  const cx = Math.floor(Math.max(0, Math.min(context.canvas.width - 1, x)));
-  const cy = Math.floor(Math.max(0, Math.min(context.canvas.height - 1, y)));
-
-  try {
-    const { data } = context.getImageData(cx, cy, 1, 1);
-    return [data[0], data[1], data[2]];
-  } catch {
-    return null;
-  }
 };
 
 const normalizeRotation = (rotation: number) => {
@@ -223,35 +496,10 @@ export const renderPage = async (
 };
 
 
-export const renderPageForColorSampling = async (
-  page: PDFPageProxy,
-  scale = 1.2,
-) => {
-  const viewport = getPageViewport(page, scale);
-  const canvas = document.createElement("canvas");
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) {
-    throw new Error("无法获取采样 Canvas Context");
-  }
-
-  await (page as any).render({
-    canvasContext: context,
-    viewport,
-    renderTextLayer: false,
-    renderAnnotationLayer: false,
-    annotationMode: 0,
-  }).promise;
-
-  return { canvas, context, viewport };
-};
-
 export const renderTextLayerForPage = async (
   page: PDFPageProxy,
   container: HTMLDivElement,
   scale = 1.2,
-  colorSourceContext?: CanvasRenderingContext2D,
 ) => {
   const viewport = getPageViewport(page, scale);
   container.innerHTML = "";
@@ -259,6 +507,7 @@ export const renderTextLayerForPage = async (
   container.style.width = `${viewport.width}px`;
   container.style.height = `${viewport.height}px`;
   const textContent = await (page as any).getTextContent();
+  const semanticTextRuns = await extractSemanticTextRuns(page);
   const textDivs: HTMLElement[] = [];
   const task = renderTextLayer({
     textContentSource: textContent,
@@ -271,6 +520,7 @@ export const renderTextLayerForPage = async (
     await task.promise;
   }
 
+  const semanticTextColors = mapTextDivColors(textDivs, semanticTextRuns);
   const isInvoicePDF = detectInvoicePDF(textContent);
   const previousInvoiceEditCleanup = (container as any).__invoiceEditCleanup;
   if (typeof previousInvoiceEditCleanup === "function") {
@@ -279,7 +529,6 @@ export const renderTextLayerForPage = async (
   delete (container as any).__invoiceEditCleanup;
 
   const COVER_SCALE = 1.01;
-  const containerRect = container.getBoundingClientRect();
 
   if (isInvoicePDF) {
     const clearEditingOutline = () => {
@@ -328,7 +577,7 @@ export const renderTextLayerForPage = async (
     };
   }
 
-  textDivs.forEach((textDiv) => {
+  textDivs.forEach((textDiv, textDivIndex) => {
     const currentSize = Number.parseFloat(textDiv.style.fontSize || "0");
     if (Number.isFinite(currentSize) && currentSize > 0) {
       textDiv.style.fontSize = `${currentSize * COVER_SCALE}px`;
@@ -355,26 +604,11 @@ export const renderTextLayerForPage = async (
       return;
     }
 
-    if (!colorSourceContext) {
-      return;
-    }
-
-    const rect = textDiv.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) {
-      return;
-    }
-
-    const sampleX = rect.left - containerRect.left + rect.width / 2;
-    const sampleY = rect.top - containerRect.top + rect.height / 2;
-    const sampled = sampleColorAtPoint(colorSourceContext, sampleX, sampleY) ??
-      sampleColorAtPoint(colorSourceContext, sampleX - 1, sampleY) ??
-      sampleColorAtPoint(colorSourceContext, sampleX + 1, sampleY) ??
-      sampleColorAtPoint(colorSourceContext, sampleX, sampleY - 1) ??
-      sampleColorAtPoint(colorSourceContext, sampleX, sampleY + 1) ??
-      [17, 24, 39];
-
-    textDiv.style.color = `rgb(${sampled[0]}, ${sampled[1]}, ${sampled[2]})`;
-    textDiv.style.caretColor = `rgb(${sampled[0]}, ${sampled[1]}, ${sampled[2]})`;
+    const semanticColor = semanticTextColors[textDivIndex];
+    const resolvedColor = semanticColor?.fillColorRGB ?? { r: 17, g: 24, b: 39 };
+    textDiv.dataset.fillColorSource = semanticColor?.fillColorSource ?? "Unknown";
+    textDiv.style.color = `rgb(${resolvedColor.r}, ${resolvedColor.g}, ${resolvedColor.b})`;
+    textDiv.style.caretColor = `rgb(${resolvedColor.r}, ${resolvedColor.g}, ${resolvedColor.b})`;
   });
 };
 

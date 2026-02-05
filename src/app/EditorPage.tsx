@@ -5,7 +5,6 @@ import {
   getPageViewport,
   loadPdfPage,
   renderPage,
-  renderPageForColorSampling,
   renderPathLayerForPage,
   renderStampLayerForPage,
   renderTextLayerForPage,
@@ -73,11 +72,10 @@ export const EditorPage = () => {
         const scale = 1.1;
         const viewport = getPageViewport(page, scale);
         setPageSize({ width: viewport.width, height: viewport.height, scale });
-        const colorSampling = await renderPageForColorSampling(page, scale);
         await renderPage(page, canvasRef.current, scale);
         await renderPathLayerForPage(page, pathLayerRef.current, scale);
         await renderStampLayerForPage(page, stampLayerRef.current, scale);
-        await renderTextLayerForPage(page, textLayerRef.current, scale, colorSampling.context);
+        await renderTextLayerForPage(page, textLayerRef.current, scale);
         textLayerRef.current.setAttribute("contenteditable", "true");
         const spans = textLayerRef.current.querySelectorAll("span");
         spans.forEach((span, index) => {
