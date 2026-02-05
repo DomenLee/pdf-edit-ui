@@ -351,7 +351,7 @@ export const renderTextLayerForPage = async (
           : SECONDARY_GRAY;
       textDiv.style.color = templateColor;
       textDiv.style.caretColor = templateColor;
-      textDiv.style.fontFamily = 'SimSun, "宋体", serif';
+      textDiv.style.fontFamily = '"宋体", SimSun, serif';
       return;
     }
 
