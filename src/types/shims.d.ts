@@ -145,6 +145,7 @@ declare module "pdfjs-dist" {
   export type PDFViewport = {
     width: number;
     height: number;
+    scale: number;
     convertToViewportRectangle?: (rect: number[]) => number[];
   };
 
@@ -158,9 +159,18 @@ declare module "pdfjs-dist" {
       canvasContext: CanvasRenderingContext2D;
       viewport: PDFViewport;
     }) => { promise: Promise<void> };
+    getTextContent?: () => Promise<{ items: unknown[] }>;
   };
 
   export const GlobalWorkerOptions: { workerSrc: string };
+
+  export function renderTextLayer(params: {
+    textContentSource: unknown;
+    container: HTMLElement;
+    viewport: PDFViewport;
+    textDivs?: HTMLElement[];
+    enhanceTextSelection?: boolean;
+  }): { promise?: Promise<void> };
 
   export function getDocument(options: {
     data: ArrayBuffer;

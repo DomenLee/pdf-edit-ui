@@ -1,4 +1,9 @@
-import { getDocument, GlobalWorkerOptions, type PDFPageProxy } from "pdfjs-dist";
+import {
+  getDocument,
+  GlobalWorkerOptions,
+  renderTextLayer,
+  type PDFPageProxy,
+} from "pdfjs-dist";
 
 GlobalWorkerOptions.workerSrc = "/pdf.worker.js";
 const baseUrl = import.meta.env.BASE_URL ?? "/";
@@ -44,6 +49,30 @@ export const renderPage = async (
   canvas.height = viewport.height;
   await page.render({ canvasContext: context, viewport }).promise;
   return { width: viewport.width, height: viewport.height, scale };
+};
+
+export const renderTextLayerForPage = async (
+  page: PDFPageProxy,
+  container: HTMLDivElement,
+  scale = 1.2,
+) => {
+  const viewport = getPageViewport(page, scale);
+  container.innerHTML = "";
+  container.style.setProperty("--scale-factor", `${viewport.scale}`);
+  container.style.width = `${viewport.width}px`;
+  container.style.height = `${viewport.height}px`;
+  const textContent = await (page as any).getTextContent();
+  const textDivs: HTMLElement[] = [];
+  const task = renderTextLayer({
+    textContentSource: textContent,
+    container,
+    viewport,
+    textDivs,
+    enhanceTextSelection: false,
+  });
+  if (task?.promise) {
+    await task.promise;
+  }
 };
 
 export const renderFirstPage = async (

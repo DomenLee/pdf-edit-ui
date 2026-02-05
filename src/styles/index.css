@@ -42,7 +42,28 @@ body {
 }
 
 .canvas-layer {
-  @apply absolute left-0 top-0;
+  @apply absolute left-0 top-0 z-10;
+}
+
+.pdf-text-layer {
+  @apply absolute left-0 top-0 z-20;
+  color: transparent;
+  pointer-events: none;
+  user-select: none;
+}
+
+.pdf-text-layer span {
+  position: absolute;
+  white-space: pre;
+  transform-origin: 0 0;
+  color: transparent;
+  caret-color: #111827;
+  pointer-events: auto;
+}
+
+.pdf-text-layer span.is-editing {
+  color: #111827;
+  user-select: text;
 }
 
 .canvas-layer [contenteditable][data-placeholder]:empty:before {
@@ -50,10 +71,7 @@ body {
   @apply text-muted-foreground;
 }
 
-.native-text-hit-area {
-  @apply absolute cursor-text rounded-sm border border-transparent bg-transparent transition-colors;
-}
-
-.native-text-hit-area:hover {
-  @apply border-primary/50 bg-primary/10;
+.pdf-text-layer span[data-text-id]:hover {
+  outline: 1px solid hsl(var(--primary) / 0.5);
+  background-color: hsl(var(--primary) / 0.1);
 }

@@ -18,9 +18,8 @@ export type OverlayObject = {
   style?: OverlayStyle;
 };
 
-export type NativeTextReplacement = {
+export type EditedTextItem = {
   id: string;
-  type: "native-text-replacement";
   pageIndex: number;
   originalText: string;
   replacementText: string;

@@ -1,10 +1,10 @@
 import { PDFDocument, rgb } from "pdf-lib";
-import { NativeTextReplacement, OverlayObject } from "../../overlay/objects/types";
+import { EditedTextItem, OverlayObject } from "../../overlay/objects/types";
 
 type ExportOptions = {
   data: ArrayBuffer;
   overlays: OverlayObject[];
-  nativeTextReplacements?: NativeTextReplacement[];
+  editedTextItems?: EditedTextItem[];
   pageSize: {
     width: number;
     height: number;
@@ -23,7 +23,7 @@ const parseHexColor = (hex: string) => {
 export const exportPdf = async ({
   data,
   overlays,
-  nativeTextReplacements = [],
+  editedTextItems = [],
   pageSize,
   filename,
 }: ExportOptions) => {
@@ -61,20 +61,20 @@ export const exportPdf = async ({
       }
     });
 
-  nativeTextReplacements
-    .filter((replacement) => replacement.pageIndex === 0)
-    .forEach((replacement) => {
-      const text = replacement.replacementText.trim();
+  editedTextItems
+    .filter((item) => item.pageIndex === 0)
+    .forEach((item) => {
+      const text = item.replacementText.trim();
       if (!text) {
         return;
       }
       page.drawText(text, {
-        x: replacement.originalBBox.x * scaleX,
+        x: item.originalBBox.x * scaleX,
         y:
           pdfHeight -
-          (replacement.originalBBox.y + replacement.originalBBox.height) *
+          (item.originalBBox.y + item.originalBBox.height) *
             scaleY,
-        size: replacement.fontSize * scaleY,
+        size: item.fontSize * scaleY,
         color: parseHexColor("#111827"),
       });
     });

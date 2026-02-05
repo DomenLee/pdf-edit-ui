@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { getOverlays, getPdfById, saveOverlays } from "../storage/pdfStorage";
-import { getPageViewport, loadPdfPage, renderPage } from "../core/pdf/pdfRenderer";
+import {
+  loadPdfPage,
+  renderPage,
+  renderTextLayerForPage,
+} from "../core/pdf/pdfRenderer";
 import { Sidebar } from "../ui/Sidebar";
 import { PropertyPanel } from "../ui/PropertyPanel";
 import { Canvas } from "../ui/Canvas";
@@ -9,17 +13,15 @@ import { Toolbar } from "../ui/Toolbar";
 import { useOverlayStore } from "../state/overlayStore";
 import { useI18nStore } from "../i18n/i18nStore";
 import { exportPdf } from "../core/export/pdfExport";
-import { NativeTextBlock } from "../overlay/NativeTextLayer";
-import { useNativeTextStore } from "../state/nativeTextStore";
+import { EditedTextItem } from "../overlay/objects/types";
+import { useTextLayerStore } from "../state/textLayerStore";
 
 export const EditorPage = () => {
   const { id } = useParams();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const textLayerRef = useRef<HTMLDivElement | null>(null);
   const [statusKey, setStatusKey] = useState("editor.status.loading");
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
-  const [nativeTextBlocks, setNativeTextBlocks] = useState<NativeTextBlock[]>(
-    [],
-  );
   const documentId = useMemo(() => id ?? "", [id]);
   const overlays = useOverlayStore((state) => state.overlays);
   const initializeOverlays = useOverlayStore(
@@ -34,11 +36,15 @@ export const EditorPage = () => {
     t: state.t,
     locale: state.locale,
   }));
-  const nativeTextReplacements = useNativeTextStore(
-    (state) => state.nativeTextReplacements,
+  const editedTextItems = useTextLayerStore((state) => state.editedTextItems);
+  const setEditedTextItems = useTextLayerStore(
+    (state) => state.setEditedTextItems,
   );
-  const setNativeTextReplacements = useNativeTextStore(
-    (state) => state.setNativeTextReplacements,
+  const setActiveEditingTextId = useTextLayerStore(
+    (state) => state.setActiveEditingTextId,
+  );
+  const upsertEditedTextItem = useTextLayerStore(
+    (state) => state.upsertEditedTextItem,
   );
 
   useEffect(() => {
@@ -55,7 +61,7 @@ export const EditorPage = () => {
         return;
       }
 
-      if (!canvasRef.current) {
+      if (!canvasRef.current || !textLayerRef.current) {
         setStatusKey("editor.status.canvasNotReady");
         return;
       }
@@ -63,49 +69,17 @@ export const EditorPage = () => {
       try {
         const page = await loadPdfPage(entry.data, 1);
         const scale = 1.1;
-        const viewport = getPageViewport(page, scale);
         const renderResult = await renderPage(page, canvasRef.current, scale);
         setPageSize(renderResult);
-        const textContent = await (page as any).getTextContent();
-        const items = (textContent.items ?? []) as Array<{
-          str?: string;
-          transform?: number[];
-          width?: number;
-          height?: number;
-        }>;
-        const blocks = items
-          .map((item, index) => {
-            const text = item.str ?? "";
-            if (!text.trim() || !item.transform) {
-              return null;
-            }
-            const [a, b, _c, _d, e, f] = item.transform;
-            const fontSize = Math.max(1, Math.hypot(a, b));
-            const rect = viewport.convertToViewportRectangle?.([
-              e,
-              f,
-              e + (item.width ?? 0),
-              f + (item.height ?? fontSize),
-            ]);
-            if (!rect) {
-              return null;
-            }
-            const [x1, y1, x2, y2] = rect;
-            return {
-              id: `native-text-${index}`,
-              pageIndex: 0,
-              text,
-              bbox: {
-                x: Math.min(x1, x2),
-                y: Math.min(y1, y2),
-                width: Math.abs(x2 - x1),
-                height: Math.abs(y2 - y1),
-              },
-              fontSize,
-            };
-          })
-          .filter(Boolean) as NativeTextBlock[];
-        setNativeTextBlocks(blocks);
+        await renderTextLayerForPage(page, textLayerRef.current, scale);
+        const spans = textLayerRef.current.querySelectorAll("span");
+        spans.forEach((span, index) => {
+          span.dataset.textId = span.dataset.textId ?? `text-${index}`;
+          span.dataset.pageIndex = "0";
+          if (!span.dataset.originalText) {
+            span.dataset.originalText = span.textContent ?? "";
+          }
+        });
         const overlayEntry = await getOverlays(documentId);
         if (overlayEntry) {
           const normalized = overlayEntry.overlays.map((overlay) => {
@@ -131,12 +105,13 @@ export const EditorPage = () => {
             };
           });
           initializeOverlays(normalized);
-          setNativeTextReplacements(
-            overlayEntry.nativeTextReplacements ?? [],
-          );
+          const legacy = (overlayEntry as {
+            nativeTextReplacements?: EditedTextItem[];
+          }).nativeTextReplacements;
+          setEditedTextItems(overlayEntry.editedTextItems ?? legacy ?? []);
         } else {
           initializeOverlays([]);
-          setNativeTextReplacements([]);
+          setEditedTextItems([]);
         }
         setStatusKey("editor.status.renderComplete");
       } catch (error) {
@@ -146,15 +121,15 @@ export const EditorPage = () => {
     };
 
     void load();
-  }, [documentId, initializeOverlays, setNativeTextReplacements]);
+  }, [documentId, initializeOverlays, setEditedTextItems]);
 
   useEffect(() => {
     if (!documentId) {
       return;
     }
     setDocumentId(documentId);
-    void saveOverlays(documentId, overlays, nativeTextReplacements);
-  }, [documentId, overlays, nativeTextReplacements, setDocumentId]);
+    void saveOverlays(documentId, overlays, editedTextItems);
+  }, [documentId, overlays, editedTextItems, setDocumentId]);
 
   const handleExport = async () => {
     if (!documentId) {
@@ -167,11 +142,124 @@ export const EditorPage = () => {
     await exportPdf({
       data: entry.data,
       overlays,
-      nativeTextReplacements,
+      editedTextItems,
       pageSize,
       filename: `${documentId}-edited.pdf`,
     });
   };
+
+  const activeSpanRef = useRef<HTMLSpanElement | null>(null);
+
+  const commitSpan = (span: HTMLSpanElement) => {
+    const container = textLayerRef.current;
+    if (!container) {
+      return;
+    }
+    const textId = span.dataset.textId;
+    if (!textId) {
+      return;
+    }
+    const replacementText = span.innerText;
+    const originalText = span.dataset.originalText ?? span.innerText;
+    const rect = span.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const bbox = {
+      x: rect.left - containerRect.left,
+      y: rect.top - containerRect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+    const fontSize = Number.parseFloat(
+      window.getComputedStyle(span).fontSize || "12",
+    );
+    const item: EditedTextItem = {
+      id: textId,
+      pageIndex: 0,
+      originalText,
+      replacementText,
+      originalBBox: bbox,
+      fontSize,
+    };
+    upsertEditedTextItem(item);
+    span.contentEditable = "false";
+    span.classList.remove("is-editing");
+    setActiveEditingTextId(null);
+    activeSpanRef.current = null;
+  };
+
+  const enterEditMode = (span: HTMLSpanElement) => {
+    span.contentEditable = "true";
+    span.classList.add("is-editing");
+    span.focus();
+    const range = document.createRange();
+    range.selectNodeContents(span);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const handleBlur = () => commitSpan(span);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitSpan(span);
+      }
+    };
+    span.addEventListener("blur", handleBlur, { once: true });
+    span.addEventListener("keydown", handleKeyDown, { once: true });
+  };
+
+  useEffect(() => {
+    const container = textLayerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const replacementMap = new Map(
+      editedTextItems.map((item) => [item.id, item]),
+    );
+
+    container.querySelectorAll("span[data-text-id]").forEach((node) => {
+      const span = node as HTMLSpanElement;
+      if (span.isContentEditable) {
+        return;
+      }
+      const replacement = replacementMap.get(span.dataset.textId ?? "");
+      if (replacement) {
+        span.textContent = replacement.replacementText;
+      } else if (span.dataset.originalText) {
+        span.textContent = span.dataset.originalText;
+      }
+    });
+  }, [editedTextItems]);
+
+  useEffect(() => {
+    const container = textLayerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const span = target?.closest("span") as HTMLSpanElement | null;
+      if (!span || !span.dataset.textId) {
+        return;
+      }
+      if (span.isContentEditable) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (activeSpanRef.current && activeSpanRef.current !== span) {
+        commitSpan(activeSpanRef.current);
+      }
+      activeSpanRef.current = span;
+      setActiveEditingTextId(span.dataset.textId ?? null);
+      enterEditMode(span);
+    };
+
+    container.addEventListener("mousedown", handlePointerDown);
+    return () => container.removeEventListener("mousedown", handlePointerDown);
+  }, [setActiveEditingTextId]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -213,10 +301,10 @@ export const EditorPage = () => {
           <Sidebar />
           <Canvas
             canvasRef={canvasRef}
+            textLayerRef={textLayerRef}
             status={t(statusKey)}
             width={pageSize.width}
             height={pageSize.height}
-            nativeTextBlocks={nativeTextBlocks}
           />
           <PropertyPanel />
         </div>
