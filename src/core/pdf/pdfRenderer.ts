@@ -26,6 +26,9 @@ type SemanticTextColor = {
   fillColorRGB: RgbColor;
   fillColorSource: ColorSource;
 };
+type SemanticTextRun = SemanticTextColor & {
+  text: string;
+};
 type GraphicsState = {
   strokeColor: RgbColor;
   fillColor: RgbColor;
@@ -149,7 +152,47 @@ const convertPdfColorToRgb = (
   return { r: 17, g: 24, b: 39 };
 };
 
-const extractSemanticTextColors = async (page: PDFPageProxy): Promise<SemanticTextColor[]> => {
+const glyphObjectToUnicode = (glyph: unknown): string => {
+  if (!glyph || typeof glyph !== "object") {
+    return "";
+  }
+  const unicode = (glyph as { unicode?: unknown }).unicode;
+  return typeof unicode === "string" ? unicode : "";
+};
+
+const getTextFromShowTextArgs = (fn: number, args: any[]): string => {
+  const opShowText = (OPS as any).showText;
+  const opShowSpacedText = (OPS as any).showSpacedText;
+  const opNextLineShowText = (OPS as any).nextLineShowText;
+  const opNextLineSetSpacingShowText = (OPS as any).nextLineSetSpacingShowText;
+
+  if (fn === opShowText) {
+    const glyphs = Array.isArray(args[0]) ? args[0] : [];
+    return glyphs.map(glyphObjectToUnicode).join("");
+  }
+
+  if (fn === opShowSpacedText) {
+    const chunks = Array.isArray(args[0]) ? args[0] : [];
+    return chunks
+      .filter((chunk) => typeof chunk === "object")
+      .map(glyphObjectToUnicode)
+      .join("");
+  }
+
+  if (fn === opNextLineShowText) {
+    const glyphs = Array.isArray(args[0]) ? args[0] : [];
+    return glyphs.map(glyphObjectToUnicode).join("");
+  }
+
+  if (fn === opNextLineSetSpacingShowText) {
+    const glyphs = Array.isArray(args[2]) ? args[2] : [];
+    return glyphs.map(glyphObjectToUnicode).join("");
+  }
+
+  return "";
+};
+
+const extractSemanticTextRuns = async (page: PDFPageProxy): Promise<SemanticTextRun[]> => {
   const opList = await (page as any).getOperatorList({
     intent: "display",
     annotationMode: 0,
@@ -171,7 +214,7 @@ const extractSemanticTextColors = async (page: PDFPageProxy): Promise<SemanticTe
   const opNextLineShowText = (OPS as any).nextLineShowText;
   const opNextLineSetSpacingShowText = (OPS as any).nextLineSetSpacingShowText;
 
-  const semanticColors: SemanticTextColor[] = [];
+  const semanticRuns: SemanticTextRun[] = [];
   let currentColorSource: ColorSource = "DeviceGray";
   let currentColorComponents: number[] = [0];
   let currentICCComponents = 3;
@@ -244,7 +287,13 @@ const extractSemanticTextColors = async (page: PDFPageProxy): Promise<SemanticTe
       fn === opNextLineShowText ||
       fn === opNextLineSetSpacingShowText
     ) {
-      semanticColors.push({
+      const text = getTextFromShowTextArgs(fn, args);
+      if (!text) {
+        continue;
+      }
+
+      semanticRuns.push({
+        text,
         fillColorSource: currentColorSource,
         fillColorRGB: convertPdfColorToRgb(
           currentColorSource,
@@ -255,9 +304,42 @@ const extractSemanticTextColors = async (page: PDFPageProxy): Promise<SemanticTe
     }
   }
 
-  return semanticColors;
+  return semanticRuns;
 };
 
+const mapTextDivColors = (textDivs: HTMLElement[], semanticRuns: SemanticTextRun[]): SemanticTextColor[] => {
+  const mapped: SemanticTextColor[] = [];
+  let runIndex = 0;
+  let runOffset = 0;
+
+  for (const textDiv of textDivs) {
+    const text = textDiv.textContent ?? "";
+    const textLen = text.length;
+
+    while (runIndex < semanticRuns.length && runOffset >= semanticRuns[runIndex].text.length) {
+      runIndex += 1;
+      runOffset = 0;
+    }
+
+    const currentRun = semanticRuns[runIndex];
+    if (!currentRun) {
+      mapped.push({
+        fillColorSource: "Unknown",
+        fillColorRGB: { r: 17, g: 24, b: 39 },
+      });
+      continue;
+    }
+
+    mapped.push({
+      fillColorSource: currentRun.fillColorSource,
+      fillColorRGB: currentRun.fillColorRGB,
+    });
+
+    runOffset += Math.max(1, textLen);
+  }
+
+  return mapped;
+};
 const TEMPLATE_RED = "#b00000";
 const DATA_BLACK = "#000000";
 const SECONDARY_GRAY = "#666666";
@@ -425,7 +507,7 @@ export const renderTextLayerForPage = async (
   container.style.width = `${viewport.width}px`;
   container.style.height = `${viewport.height}px`;
   const textContent = await (page as any).getTextContent();
-  const semanticTextColors = await extractSemanticTextColors(page);
+  const semanticTextRuns = await extractSemanticTextRuns(page);
   const textDivs: HTMLElement[] = [];
   const task = renderTextLayer({
     textContentSource: textContent,
@@ -438,6 +520,7 @@ export const renderTextLayerForPage = async (
     await task.promise;
   }
 
+  const semanticTextColors = mapTextDivColors(textDivs, semanticTextRuns);
   const isInvoicePDF = detectInvoicePDF(textContent);
   const previousInvoiceEditCleanup = (container as any).__invoiceEditCleanup;
   if (typeof previousInvoiceEditCleanup === "function") {
