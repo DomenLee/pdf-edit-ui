@@ -2,7 +2,7 @@ import { RefObject, useEffect, useState } from "react";
 import { cn } from "../components/ui/utils";
 
 type CanvasProps = {
-  pageCanvasRef: RefObject<HTMLCanvasElement>;
+  backgroundImageUrl: string;
   textLayerRef: RefObject<HTMLDivElement>;
   status: string;
   width: number;
@@ -12,7 +12,7 @@ type CanvasProps = {
 };
 
 export const Canvas = ({
-  pageCanvasRef,
+  backgroundImageUrl,
   textLayerRef,
   status,
   width,
@@ -47,10 +47,12 @@ export const Canvas = ({
         >
           {zoomPercent}%
         </div>
-        <canvas
-          ref={pageCanvasRef}
-          className="pdf-canvas-layer"
+        <img
+          src={backgroundImageUrl}
+          alt="pdf-page-background"
+          className="pdf-background-layer"
           style={{ width, height }}
+          draggable={false}
         />
         <div
           ref={textLayerRef}

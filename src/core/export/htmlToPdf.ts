@@ -4,7 +4,7 @@ import type { OverlayObject } from "../../overlay/objects/types";
 type HtmlToPdfOptions = {
   filename: string;
   textLayer: HTMLDivElement;
-  pageCanvas: HTMLCanvasElement;
+  backgroundImageUrl: string;
   viewportScale: number;
   overlays?: OverlayObject[];
 };
@@ -68,7 +68,7 @@ const triggerDownload = (bytes: Uint8Array, filename: string) => {
 export const exportHtmlToPdf = async ({
   filename,
   textLayer,
-  pageCanvas,
+  backgroundImageUrl,
   viewportScale,
   overlays = [],
 }: HtmlToPdfOptions) => {
@@ -81,9 +81,7 @@ export const exportHtmlToPdf = async ({
   const page = pdfDoc.addPage([pageWidth, pageHeight]);
   const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-  const pngBytes = await fetch(pageCanvas.toDataURL("image/png")).then((response) =>
-    response.arrayBuffer(),
-  );
+  const pngBytes = await fetch(backgroundImageUrl).then((response) => response.arrayBuffer());
   const pngImage = await (pdfDoc as any).embedPng(pngBytes);
   (page as any).drawImage(pngImage, { x: 0, y: 0, width: pageWidth, height: pageHeight });
 

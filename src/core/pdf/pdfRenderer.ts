@@ -11,6 +11,26 @@ const cMapUrl = `${baseUrl}cmaps/`;
 const standardFontDataUrl = `${baseUrl}standard_fonts/`;
 
 type Matrix = [number, number, number, number, number, number];
+type TextLayerSpanDescriptor = {
+  text: string;
+  transform: string;
+  fontSizePx: number;
+  fontFamily: string;
+  color: string;
+  textId: string;
+  pageIndex: number;
+};
+
+type TextGroup = {
+  text: string;
+  xPdf: number;
+  yPdf: number;
+  widthPdf: number;
+  fontSizePdf: number;
+  fontName: string;
+  angleRad: number;
+  color: string;
+};
 type RgbColor = { r: number; g: number; b: number };
 type GraphicsState = {
   strokeColor: RgbColor;
@@ -76,10 +96,10 @@ export const getPageViewport = (page: PDFPageProxy, scale: number) => {
 
 export const renderPage = async (
   page: PDFPageProxy,
-  canvas: HTMLCanvasElement,
   scale = 1.2,
 ) => {
   const viewport = getPageViewport(page, scale);
+  const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
   if (!context) {
     throw new Error("无法获取 2D Context");
@@ -122,44 +142,187 @@ export const renderPage = async (
       },
     } as any)
     .promise;
-  return { width: viewport.width, height: viewport.height, scale };
+
+  const backgroundImageDataUrl = canvas.toDataURL("image/png");
+  return {
+    width: viewport.width,
+    height: viewport.height,
+    scale,
+    pageHeight: ((page as any).view?.[3] ?? viewport.height / scale) - ((page as any).view?.[1] ?? 0),
+    backgroundImageDataUrl,
+  };
+};
+
+const toCssColor = (rgb: RgbColor, alpha = 1) =>
+  `rgba(${Math.round(clamp(rgb.r) * 255)},${Math.round(clamp(rgb.g) * 255)},${Math.round(clamp(rgb.b) * 255)},${Math.max(0, Math.min(1, alpha))})`;
+
+const extractTextPaintColors = async (page: PDFPageProxy) => {
+  const opList = await (page as any).getOperatorList();
+  const fnArray: number[] = opList?.fnArray ?? [];
+  const argsArray: any[] = opList?.argsArray ?? [];
+  const colors: string[] = [];
+
+  const opSetFillRGB = (OPS as any).setFillRGBColor;
+  const opSetFillGray = (OPS as any).setFillGray;
+  const opSetFillCMYK = (OPS as any).setFillCMYKColor;
+  const opSetFillAlpha = (OPS as any).setFillAlpha;
+  const opShowText = (OPS as any).showText;
+  const opShowSpacedText = (OPS as any).showSpacedText;
+  const opNextLineShowText = (OPS as any).nextLineShowText;
+  const opNextLineSetSpacingShowText = (OPS as any).nextLineSetSpacingShowText;
+
+  let fillColor: RgbColor = { ...DEFAULT_FILL };
+  let fillAlpha = 1;
+
+  for (let i = 0; i < fnArray.length; i += 1) {
+    const fn = fnArray[i];
+    const args = argsArray[i] ?? [];
+
+    if (fn === opSetFillRGB) {
+      fillColor = { r: clamp(args[0] ?? 0), g: clamp(args[1] ?? 0), b: clamp(args[2] ?? 0) };
+      continue;
+    }
+    if (fn === opSetFillGray) {
+      const gray = clamp(args[0] ?? 0);
+      fillColor = { r: gray, g: gray, b: gray };
+      continue;
+    }
+    if (fn === opSetFillCMYK) {
+      fillColor = cmykToRgb(args[0] ?? 0, args[1] ?? 0, args[2] ?? 0, args[3] ?? 0);
+      continue;
+    }
+    if (fn === opSetFillAlpha) {
+      fillAlpha = Math.max(0, Math.min(1, Number(args[0] ?? 1)));
+      continue;
+    }
+
+    if (
+      fn === opShowText ||
+      fn === opShowSpacedText ||
+      fn === opNextLineShowText ||
+      fn === opNextLineSetSpacingShowText
+    ) {
+      colors.push(toCssColor(fillColor, fillAlpha));
+    }
+  }
+
+  return colors;
+};
+
+const createTextLayerDescriptors = (
+  items: any[],
+  colors: string[],
+  pageHeight: number,
+  scale: number,
+): TextLayerSpanDescriptor[] => {
+  const groups: TextGroup[] = [];
+  const lineThresholdPdf = 1.25;
+  const gapFactor = 0.35;
+
+  items.forEach((item, index) => {
+    const text = String(item?.str ?? "");
+    if (!text) {
+      return;
+    }
+
+    const transform = item.transform as Matrix;
+    const xPdf = Number(transform[4] ?? 0);
+    const yPdf = Number(transform[5] ?? 0);
+    const fontSizePdf = Math.hypot(Number(transform[2] ?? 0), Number(transform[3] ?? 0));
+    const widthPdf = Number(item.width ?? 0);
+    const angleRad = Math.atan2(Number(transform[1] ?? 0), Number(transform[0] ?? 1));
+    const fontName = String(item.fontName ?? "sans-serif");
+    const color = colors[index] ?? "rgba(17,24,39,1)";
+
+    const previous = groups[groups.length - 1];
+    if (!previous) {
+      groups.push({ text, xPdf, yPdf, widthPdf, fontSizePdf, fontName, angleRad, color });
+      return;
+    }
+
+    const sameLine = Math.abs(previous.yPdf - yPdf) <= lineThresholdPdf;
+    const sameFont = previous.fontName === fontName;
+    const sameSize = Math.abs(previous.fontSizePdf - fontSizePdf) <= 0.35;
+    const sameAngle = Math.abs(previous.angleRad - angleRad) <= 0.01;
+    const sameColor = previous.color === color;
+    const expectedNextXPdf = previous.xPdf + previous.widthPdf;
+    const gapPdf = Math.abs(xPdf - expectedNextXPdf);
+    const allowedGapPdf = Math.max(0.75, fontSizePdf * gapFactor);
+    const shouldMerge = sameLine && sameFont && sameSize && sameAngle && sameColor && gapPdf <= allowedGapPdf;
+
+    if (!shouldMerge) {
+      groups.push({ text, xPdf, yPdf, widthPdf, fontSizePdf, fontName, angleRad, color });
+      return;
+    }
+
+    previous.text += text;
+    previous.widthPdf = Math.max(previous.widthPdf + widthPdf, xPdf + widthPdf - previous.xPdf);
+  });
+
+  return groups.map((group, index) => {
+    const baselineCorrection = group.fontSizePdf * 0.8;
+    // PDF 文本锚点是基线附近，DOM translate 锚点是盒子左上角，因此这里做统一 baseline 经验修正。
+    const x = group.xPdf * scale;
+    const y = (pageHeight - group.yPdf - baselineCorrection) * scale;
+    // 浏览器字体与 PDF 子集字体会有字宽偏差，这里先写入期望宽度，后续在 DOM 里做 scaleX 纠偏。
+    const expectedWidthPx = Math.max(0, group.widthPdf * scale);
+
+    return {
+      text: group.text,
+      transform: `translate(${x}px, ${y}px) rotate(${group.angleRad}rad)`,
+      fontSizePx: group.fontSizePdf * scale,
+      fontFamily: group.fontName,
+      color: group.color,
+      textId: `text-${index}`,
+      pageIndex: 0,
+      expectedWidthPx,
+    } as TextLayerSpanDescriptor & { expectedWidthPx: number };
+  });
 };
 
 export const renderTextLayerForPage = async (
   page: PDFPageProxy,
   container: HTMLDivElement,
+  pageHeight: number,
   scale = 1.2,
 ) => {
   const viewport = getPageViewport(page, scale);
-  const viewportTransform = (viewport as any).transform as Matrix;
   container.innerHTML = "";
   container.style.width = `${viewport.width}px`;
   container.style.height = `${viewport.height}px`;
+  container.style.transformOrigin = "0 0";
   const textContent = await (page as any).getTextContent();
+  const textColors = await extractTextPaintColors(page);
+  const spanDescriptors = createTextLayerDescriptors(
+    textContent.items ?? [],
+    textColors,
+    pageHeight,
+    scale,
+  ) as Array<TextLayerSpanDescriptor & { expectedWidthPx: number }>;
 
-  (textContent.items ?? []).forEach((item: any, index: number) => {
-    if (!item?.str) {
-      return;
-    }
-
+  spanDescriptors.forEach((descriptor) => {
     const span = document.createElement("span");
-    const tx = multiplyMatrix(viewportTransform, item.transform as Matrix);
-
-    const fontHeight = Math.hypot(tx[2], tx[3]);
-    const angle = Math.atan2(tx[1], tx[0]);
-
-    span.textContent = item.str;
-    span.dataset.textId = `text-${index}`;
-    span.dataset.pageIndex = "0";
-    span.dataset.originalText = item.str;
+    span.textContent = descriptor.text;
+    span.dataset.textId = descriptor.textId;
+    span.dataset.pageIndex = `${descriptor.pageIndex}`;
+    span.dataset.originalText = descriptor.text;
     span.contentEditable = "true";
-    span.style.left = `${tx[4]}px`;
-    span.style.top = `${tx[5]}px`;
-    span.style.fontSize = `${fontHeight}px`;
-    span.style.transform = `rotate(${angle}rad) translateY(-100%)`;
-    span.style.fontFamily = item.fontName ?? "sans-serif";
+    span.style.transformOrigin = "0 0";
+    span.style.transform = descriptor.transform;
+    span.style.fontSize = `${descriptor.fontSizePx}px`;
+    span.style.fontFamily = descriptor.fontFamily;
+    span.style.color = descriptor.color;
+    span.style.whiteSpace = "pre";
 
     container.appendChild(span);
+
+    const measuredWidth = span.getBoundingClientRect().width;
+    if (measuredWidth <= 0 || descriptor.expectedWidthPx <= 0) {
+      return;
+    }
+    const scaleX = descriptor.expectedWidthPx / measuredWidth;
+    // PDF 字符宽和浏览器排版宽不一致时，使用 scaleX 做横向纠偏，避免行内累计漂移。
+    span.style.transform = `${descriptor.transform} scaleX(${scaleX})`;
   });
 };
 
@@ -470,8 +633,7 @@ export const renderPathLayerForPage = async (
 
 export const renderFirstPage = async (
   data: ArrayBuffer,
-  canvas: HTMLCanvasElement,
 ) => {
   const page = await loadPdfPage(data, 1);
-  return renderPage(page, canvas);
+  return renderPage(page);
 };

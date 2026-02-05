@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { getOverlays, getPdfById, saveOverlays } from "../storage/pdfStorage";
 import {
-  getPageViewport,
   loadPdfPage,
   renderPage,
   renderTextLayerForPage,
@@ -15,9 +14,9 @@ import { exportHtmlToPdf } from "../core/export/htmlToPdf";
 
 export const EditorPage = () => {
   const { id } = useParams();
-  const pageCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
   const [statusKey, setStatusKey] = useState("editor.status.loading");
+  const [backgroundImageUrl, setBackgroundImageUrl] = useState("");
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
   const [zoomScale, setZoomScale] = useState(1);
   const documentId = useMemo(() => id ?? "", [id]);
@@ -47,7 +46,7 @@ export const EditorPage = () => {
         return;
       }
 
-      if (!textLayerRef.current || !pageCanvasRef.current) {
+      if (!textLayerRef.current) {
         setStatusKey("editor.status.canvasNotReady");
         requestAnimationFrame(() => {
           if (!cancelled) {
@@ -66,10 +65,10 @@ export const EditorPage = () => {
       try {
         const page = await loadPdfPage(entry.data, 1);
         const scale = 1.1;
-        const viewport = getPageViewport(page, scale);
-        setPageSize({ width: viewport.width, height: viewport.height, scale });
-        await renderPage(page, pageCanvasRef.current, scale);
-        await renderTextLayerForPage(page, textLayerRef.current, scale);
+        const rendered = await renderPage(page, scale);
+        setBackgroundImageUrl(rendered.backgroundImageDataUrl);
+        setPageSize({ width: rendered.width, height: rendered.height, scale });
+        await renderTextLayerForPage(page, textLayerRef.current, rendered.pageHeight, scale);
         const overlayEntry = await getOverlays(documentId);
         if (overlayEntry) {
           const normalized = overlayEntry.overlays.map((overlay) => {
@@ -125,15 +124,14 @@ export const EditorPage = () => {
       return;
     }
     const textLayer = textLayerRef.current;
-    const pageCanvas = pageCanvasRef.current;
-    if (!textLayer || !pageCanvas) {
+    if (!textLayer || !backgroundImageUrl) {
       return;
     }
 
     await exportHtmlToPdf({
       filename: `${documentId}-edited.pdf`,
       textLayer,
-      pageCanvas,
+      backgroundImageUrl,
       viewportScale: pageSize.scale || 1,
       overlays,
     });
@@ -196,7 +194,7 @@ export const EditorPage = () => {
         />
         <div className="editor-body">
           <Canvas
-            pageCanvasRef={pageCanvasRef}
+            backgroundImageUrl={backgroundImageUrl}
             textLayerRef={textLayerRef}
             status={t(statusKey)}
             width={pageSize.width}
