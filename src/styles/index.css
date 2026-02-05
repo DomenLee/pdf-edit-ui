@@ -77,7 +77,8 @@ body {
   caret-color: #111827;
   pointer-events: auto;
   outline: none;
-  background-color: var(--pdf-page-bg);
+  background: none;
+  text-shadow: 0 0 0 #fff, 0 0 1px #fff, 0 0 2px #fff;
 }
 
 .pdf-text-layer span.is-editing {
@@ -87,10 +88,25 @@ body {
 
 .pdf-path-layer {
   @apply absolute left-0 top-0;
-  z-index: 15;
+  z-index: 12;
   pointer-events: none;
 }
 
+.pdf-stamp-layer {
+  @apply absolute left-0 top-0;
+  z-index: 15;
+  pointer-events: auto;
+}
+
+.pdf-stamp-item {
+  user-select: none;
+  pointer-events: auto;
+}
+
 .pdf-text-layer span[data-text-id]:hover {
-  background-color: var(--pdf-page-bg);
+  background: none;
+}
+
+.pdf-text-layer[contenteditable="true"] span {
+  text-shadow: 0 0 0 #fff, 0 0 1px #fff;
 }

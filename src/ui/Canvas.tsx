@@ -5,6 +5,7 @@ type CanvasProps = {
   canvasRef: RefObject<HTMLCanvasElement>;
   textLayerRef: RefObject<HTMLDivElement>;
   pathLayerRef: RefObject<HTMLDivElement>;
+  stampLayerRef: RefObject<HTMLDivElement>;
   status: string;
   width: number;
   height: number;
@@ -16,6 +17,7 @@ export const Canvas = ({
   canvasRef,
   textLayerRef,
   pathLayerRef,
+  stampLayerRef,
   status,
   width,
   height,
@@ -57,6 +59,11 @@ export const Canvas = ({
         <div
           ref={pathLayerRef}
           className="pdf-path-layer"
+          style={{ width, height }}
+        />
+        <div
+          ref={stampLayerRef}
+          className="pdf-stamp-layer"
           style={{ width, height }}
         />
         <div
