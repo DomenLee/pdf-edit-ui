@@ -88,7 +88,30 @@ export const renderPage = async (
 
   canvas.width = viewport.width;
   canvas.height = viewport.height;
-  await page.render({ canvasContext: context, viewport }).promise;
+
+  const originalFillText = context.fillText.bind(context);
+  const originalStrokeText = context.strokeText.bind(context);
+
+  context.fillText = (() => {
+    return;
+  }) as CanvasRenderingContext2D["fillText"];
+  context.strokeText = (() => {
+    return;
+  }) as CanvasRenderingContext2D["strokeText"];
+
+  try {
+    const renderTask = (page as any).render({
+      canvasContext: context,
+      viewport,
+      renderTextLayer: false,
+      renderAnnotationLayer: true,
+    });
+    await renderTask.promise;
+  } finally {
+    context.fillText = originalFillText;
+    context.strokeText = originalStrokeText;
+  }
+
   return { width: viewport.width, height: viewport.height, scale };
 };
 
@@ -114,6 +137,18 @@ export const renderTextLayerForPage = async (
   if (task?.promise) {
     await task.promise;
   }
+
+  const COVER_SCALE = 1.02;
+  textDivs.forEach((textDiv) => {
+    const currentSize = Number.parseFloat(textDiv.style.fontSize || "0");
+    if (Number.isFinite(currentSize) && currentSize > 0) {
+      textDiv.style.fontSize = `${currentSize * COVER_SCALE}px`;
+    }
+    textDiv.style.lineHeight = "1";
+    textDiv.style.whiteSpace = "pre";
+    textDiv.style.backgroundColor = "#fff";
+    textDiv.style.outline = "none";
+  });
 };
 
 const buildSvgPathElement = (

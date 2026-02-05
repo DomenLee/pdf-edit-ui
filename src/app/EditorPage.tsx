@@ -4,6 +4,7 @@ import { getOverlays, getPdfById, saveOverlays } from "../storage/pdfStorage";
 import {
   getPageViewport,
   loadPdfPage,
+  renderPage,
   renderPathLayerForPage,
   renderTextLayerForPage,
 } from "../core/pdf/pdfRenderer";
@@ -15,6 +16,7 @@ import { exportHtmlToPdf } from "../core/export/htmlToPdf";
 
 export const EditorPage = () => {
   const { id } = useParams();
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
   const pathLayerRef = useRef<HTMLDivElement | null>(null);
   const [statusKey, setStatusKey] = useState("editor.status.loading");
@@ -47,7 +49,7 @@ export const EditorPage = () => {
         return;
       }
 
-      if (!textLayerRef.current || !pathLayerRef.current) {
+      if (!canvasRef.current || !textLayerRef.current || !pathLayerRef.current) {
         setStatusKey("editor.status.canvasNotReady");
         requestAnimationFrame(() => {
           if (!cancelled) {
@@ -68,6 +70,7 @@ export const EditorPage = () => {
         const scale = 1.1;
         const viewport = getPageViewport(page, scale);
         setPageSize({ width: viewport.width, height: viewport.height, scale });
+        await renderPage(page, canvasRef.current, scale);
         await renderTextLayerForPage(page, textLayerRef.current, scale);
         await renderPathLayerForPage(page, pathLayerRef.current, scale);
         const spans = textLayerRef.current.querySelectorAll("span");
@@ -205,6 +208,7 @@ export const EditorPage = () => {
         />
         <div className="editor-body">
           <Canvas
+            canvasRef={canvasRef}
             textLayerRef={textLayerRef}
             pathLayerRef={pathLayerRef}
             status={t(statusKey)}

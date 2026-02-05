@@ -2,6 +2,7 @@ import { RefObject, useEffect, useState } from "react";
 import { cn } from "../components/ui/utils";
 
 type CanvasProps = {
+  canvasRef: RefObject<HTMLCanvasElement>;
   textLayerRef: RefObject<HTMLDivElement>;
   pathLayerRef: RefObject<HTMLDivElement>;
   status: string;
@@ -12,6 +13,7 @@ type CanvasProps = {
 };
 
 export const Canvas = ({
+  canvasRef,
   textLayerRef,
   pathLayerRef,
   status,
@@ -47,6 +49,11 @@ export const Canvas = ({
         >
           {zoomPercent}%
         </div>
+        <canvas
+          ref={canvasRef}
+          className="pdf-canvas-bg"
+          style={{ width, height }}
+        />
         <div
           ref={pathLayerRef}
           className="pdf-path-layer"
