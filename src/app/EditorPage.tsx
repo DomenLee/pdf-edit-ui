@@ -13,8 +13,7 @@ import { Canvas } from "../ui/Canvas";
 import { Toolbar } from "../ui/Toolbar";
 import { useOverlayStore } from "../state/overlayStore";
 import { useI18nStore } from "../i18n/i18nStore";
-import { exportPdf } from "../core/export/pdfExport";
-import type { EditedTextItem } from "../overlay/objects/types";
+import { exportHtmlToPdf } from "../core/export/htmlToPdf";
 
 export const EditorPage = () => {
   const { id } = useParams();
@@ -22,7 +21,6 @@ export const EditorPage = () => {
   const pathLayerRef = useRef<HTMLDivElement | null>(null);
   const [statusKey, setStatusKey] = useState("editor.status.loading");
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
-  const [pdfPageSize, setPdfPageSize] = useState({ width: 0, height: 0 });
   const documentId = useMemo(() => id ?? "", [id]);
   const overlays = useOverlayStore((state) => state.overlays);
   const initializeOverlays = useOverlayStore(
@@ -71,11 +69,6 @@ export const EditorPage = () => {
         const scale = 1.1;
         const viewport = getPageViewport(page, scale);
         setPageSize({ width: viewport.width, height: viewport.height, scale });
-        const baseViewport = page.getViewport({ scale: 1 });
-        setPdfPageSize({
-          width: baseViewport.width,
-          height: baseViewport.height,
-        });
         await renderTextLayerForPage(page, textLayerRef.current, scale);
         await renderPathLayerForPage(page, pathLayerRef.current, scale);
         const spans = textLayerRef.current.querySelectorAll("span");
@@ -141,55 +134,18 @@ export const EditorPage = () => {
     if (!documentId) {
       return;
     }
-    const entry = await getPdfById(documentId);
-    if (!entry) {
-      return;
-    }
     const textLayer = textLayerRef.current;
     const pathLayer = pathLayerRef.current;
     if (!textLayer || !pathLayer) {
       return;
     }
-    const containerRect = textLayer.getBoundingClientRect();
-    const scale = pageSize.scale || 1;
-    const textItems = Array.from(textLayer.querySelectorAll("span")).map(
-      (span, index) => {
-        const rect = span.getBoundingClientRect();
-        const fontSize = Number.parseFloat(
-          window.getComputedStyle(span).fontSize || "12",
-        );
-        const text = span.textContent ?? "";
-        return {
-          id: span.dataset.textId ?? `text-${index}`,
-          pageIndex: 0,
-          originalText: span.dataset.originalText ?? text,
-          replacementText: text,
-          bbox: {
-            x: (rect.left - containerRect.left) / scale,
-            y: pdfPageSize.height
-              ? pdfPageSize.height - (rect.top - containerRect.top + rect.height) / scale
-              : (rect.top - containerRect.top) / scale,
-            width: rect.width / scale,
-            height: rect.height / scale,
-          },
-          fontSize: fontSize / scale,
-        };
-      },
-    );
-    const svgPaths = Array.from(pathLayer.querySelectorAll("path")).map(
-      (path) => ({
-        d: path.getAttribute("d") ?? "",
-        fill: path.getAttribute("fill") ?? "none",
-        stroke: path.getAttribute("stroke") ?? "none",
-        strokeWidth: path.getAttribute("stroke-width") ?? "1",
-      }),
-    );
-    await exportPdf({
-      data: entry.data,
-      overlays,
-      editedTextItems: textItems,
-      svgPaths,
+
+    await exportHtmlToPdf({
       filename: `${documentId}-edited.pdf`,
+      textLayer,
+      pathLayer,
+      viewportScale: pageSize.scale || 1,
+      overlays,
     });
   };
 

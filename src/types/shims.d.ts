@@ -124,16 +124,25 @@ declare module "react-router-dom" {
 }
 
 declare module "pdf-lib" {
+  type PdfPage = {
+    getSize(): { width: number; height: number };
+    drawText: (text: string, options: any) => void;
+    drawRectangle: (options: any) => void;
+    drawSvgPath: (path: string, options: any) => void;
+  };
+
   export class PDFDocument {
     static load(data: ArrayBuffer): Promise<PDFDocument>;
-    getPage(index: number): {
-      getSize(): { width: number; height: number };
-      drawText: (text: string, options: any) => void;
-      drawRectangle: (options: any) => void;
-      drawSvgPath: (path: string, options: any) => void;
-    };
+    static create(): Promise<PDFDocument>;
+    getPage(index: number): PdfPage;
+    addPage(size?: [number, number]): PdfPage;
+    embedFont(font: string): Promise<any>;
     save(): Promise<Uint8Array>;
   }
+
+  export const StandardFonts: {
+    Helvetica: string;
+  };
 
   export function rgb(
     r: number,
