@@ -8,6 +8,7 @@ type CanvasProps = {
   width: number;
   height: number;
   zoomPercent: number;
+  zoomScale: number;
 };
 
 export const Canvas = ({
@@ -17,6 +18,7 @@ export const Canvas = ({
   width,
   height,
   zoomPercent,
+  zoomScale,
 }: CanvasProps) => {
   const [showZoom, setShowZoom] = useState(false);
 
@@ -28,8 +30,15 @@ export const Canvas = ({
 
   return (
     <section className="canvas-stage">
-      <div className="p-4 text-xs text-muted-foreground">{status}</div>
-      <div className="relative mx-auto mb-10" style={{ width, height }}>
+      <div className="pdf-status">{status}</div>
+      <div
+        className="pdf-page-shell"
+        style={{
+          width,
+          height,
+          transform: `scale(${zoomScale})`,
+        }}
+      >
         <div
           className={cn(
             "pointer-events-none absolute left-1/2 top-1/2 z-30 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/70 px-4 py-2 text-sm text-foreground/80 shadow-md backdrop-blur transition-all",

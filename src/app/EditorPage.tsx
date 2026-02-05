@@ -7,8 +7,6 @@ import {
   renderPathLayerForPage,
   renderTextLayerForPage,
 } from "../core/pdf/pdfRenderer";
-import { Sidebar } from "../ui/Sidebar";
-import { PropertyPanel } from "../ui/PropertyPanel";
 import { Canvas } from "../ui/Canvas";
 import { Toolbar } from "../ui/Toolbar";
 import { useOverlayStore } from "../state/overlayStore";
@@ -21,6 +19,7 @@ export const EditorPage = () => {
   const pathLayerRef = useRef<HTMLDivElement | null>(null);
   const [statusKey, setStatusKey] = useState("editor.status.loading");
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
+  const [zoomScale, setZoomScale] = useState(1);
   const documentId = useMemo(() => id ?? "", [id]);
   const overlays = useOverlayStore((state) => state.overlays);
   const initializeOverlays = useOverlayStore(
@@ -149,6 +148,19 @@ export const EditorPage = () => {
     });
   };
 
+
+  const handleZoomIn = () => {
+    setZoomScale((prev) => Math.min(2.5, Number((prev + 0.1).toFixed(2))));
+  };
+
+  const handleZoomOut = () => {
+    setZoomScale((prev) => Math.max(0.5, Number((prev - 0.1).toFixed(2))));
+  };
+
+  const handleZoomReset = () => {
+    setZoomScale(1);
+  };
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isEditableTarget =
@@ -184,18 +196,23 @@ export const EditorPage = () => {
   return (
     <div className="editor-shell">
       <div className="editor-layout">
-        <Toolbar onExport={handleExport} />
+        <Toolbar
+          onExport={handleExport}
+          onZoomIn={handleZoomIn}
+          onZoomOut={handleZoomOut}
+          onZoomReset={handleZoomReset}
+          zoomPercent={Math.round(zoomScale * 100)}
+        />
         <div className="editor-body">
-          <Sidebar />
           <Canvas
             textLayerRef={textLayerRef}
             pathLayerRef={pathLayerRef}
             status={t(statusKey)}
             width={pageSize.width}
             height={pageSize.height}
-            zoomPercent={Math.round(pageSize.scale * 100)}
+            zoomPercent={Math.round(zoomScale * 100)}
+            zoomScale={zoomScale}
           />
-          <PropertyPanel />
         </div>
       </div>
     </div>

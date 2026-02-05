@@ -12,10 +12,20 @@ import { useHistoryStore } from "../state/historyStore";
 import { useI18nStore } from "../i18n/i18nStore";
 
 type ToolbarProps = {
+  zoomPercent: number;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onZoomReset: () => void;
   onExport: () => void;
 };
 
-export const Toolbar = ({ onExport }: ToolbarProps) => {
+export const Toolbar = ({
+  zoomPercent,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
+  onExport,
+}: ToolbarProps) => {
   const undo = useOverlayStore((state) => state.undo);
   const redo = useOverlayStore((state) => state.redo);
   const pastCount = useHistoryStore((state) => state.past.length);
@@ -52,7 +62,7 @@ export const Toolbar = ({ onExport }: ToolbarProps) => {
           <Button
             variant="outline"
             size="icon"
-            disabled
+            onClick={() => console.info("Edit mode active")}
             className="h-9 w-9 rounded-xl border-0 bg-white/70 text-foreground/80 opacity-100"
           >
             <PencilLine className="h-4 w-4" />
@@ -64,6 +74,7 @@ export const Toolbar = ({ onExport }: ToolbarProps) => {
           <Button
             variant="outline"
             size="icon"
+            onClick={onZoomOut}
             className="h-8 w-8 rounded-lg border-0 bg-transparent text-foreground/80 hover:bg-white/60"
           >
             <ZoomOut className="h-4 w-4" />
@@ -72,13 +83,15 @@ export const Toolbar = ({ onExport }: ToolbarProps) => {
           <Button
             variant="outline"
             size="sm"
+            onClick={onZoomReset}
             className="h-8 min-w-14 rounded-lg border-0 bg-transparent px-2 text-xs font-medium text-foreground/75 hover:bg-white/60"
           >
-            100%
+            {zoomPercent}%
           </Button>
           <Button
             variant="outline"
             size="icon"
+            onClick={onZoomIn}
             className="h-8 w-8 rounded-lg border-0 bg-transparent text-foreground/80 hover:bg-white/60"
           >
             <ZoomIn className="h-4 w-4" />
