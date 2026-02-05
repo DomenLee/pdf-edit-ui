@@ -1,135 +1,218 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { PDFDocument, rgb } from "pdf-lib";
 import { getOverlays, getPdfById, saveOverlays } from "../storage/pdfStorage";
-import { loadPdfPage, renderPage } from "../core/pdf/pdfRenderer";
-import { EditorToolbar } from "../ui/EditorToolbar";
-import { Sidebar } from "../ui/Sidebar";
-import { PropertyPanel } from "../ui/PropertyPanel";
-import { CanvasStage } from "../ui/CanvasStage";
-import { useEditorStore } from "../state/editorStore";
-import { OverlayItem } from "../overlay/types";
+import {
+  getPageViewport,
+  loadPdfPage,
+  renderPathLayerForPage,
+  renderTextLayerForPage,
+} from "../core/pdf/pdfRenderer";
+import { Canvas } from "../ui/Canvas";
+import { Toolbar } from "../ui/Toolbar";
+import { useOverlayStore } from "../state/overlayStore";
+import { useI18nStore } from "../i18n/i18nStore";
+import { exportHtmlToPdf } from "../core/export/htmlToPdf";
 
 export const EditorPage = () => {
   const { id } = useParams();
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [status, setStatus] = useState("加载中...");
+  const textLayerRef = useRef<HTMLDivElement | null>(null);
+  const pathLayerRef = useRef<HTMLDivElement | null>(null);
+  const [statusKey, setStatusKey] = useState("editor.status.loading");
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
+  const [zoomScale, setZoomScale] = useState(1);
   const documentId = useMemo(() => id ?? "", [id]);
-  const overlays = useEditorStore((state) => state.overlays);
-  const initializeOverlays = useEditorStore((state) => state.initializeOverlays);
+  const overlays = useOverlayStore((state) => state.overlays);
+  const initializeOverlays = useOverlayStore(
+    (state) => state.initializeOverlays,
+  );
+  const setDocumentId = useOverlayStore((state) => state.setDocumentId);
+  const undo = useOverlayStore((state) => state.undo);
+  const redo = useOverlayStore((state) => state.redo);
+  const selectedId = useOverlayStore((state) => state.selectedId);
+  const deleteOverlay = useOverlayStore((state) => state.deleteOverlay);
+  const { t } = useI18nStore((state) => ({
+    t: state.t,
+    locale: state.locale,
+  }));
 
   useEffect(() => {
+    let cancelled = false;
     const load = async () => {
+      if (cancelled) {
+        return;
+      }
+      setStatusKey("editor.status.loading");
       if (!documentId) {
-        setStatus("缺少文档 ID。");
+        setStatusKey("editor.status.missingId");
+        return;
+      }
+
+      if (!textLayerRef.current || !pathLayerRef.current) {
+        setStatusKey("editor.status.canvasNotReady");
+        requestAnimationFrame(() => {
+          if (!cancelled) {
+            void load();
+          }
+        });
         return;
       }
 
       const entry = await getPdfById(documentId);
       if (!entry) {
-        setStatus("未找到对应 PDF。");
-        return;
-      }
-
-      if (!canvasRef.current) {
-        setStatus("Canvas 未准备好。");
+        setStatusKey("editor.status.missingPdf");
         return;
       }
 
       try {
         const page = await loadPdfPage(entry.data, 1);
-        const viewport = await renderPage(page, canvasRef.current, 1.1);
-        setPageSize(viewport);
+        const scale = 1.1;
+        const viewport = getPageViewport(page, scale);
+        setPageSize({ width: viewport.width, height: viewport.height, scale });
+        await renderTextLayerForPage(page, textLayerRef.current, scale);
+        await renderPathLayerForPage(page, pathLayerRef.current, scale);
+        const spans = textLayerRef.current.querySelectorAll("span");
+        spans.forEach((span, index) => {
+          span.dataset.textId = span.dataset.textId ?? `text-${index}`;
+          span.dataset.pageIndex = "0";
+          if (!span.dataset.originalText) {
+            span.dataset.originalText = span.textContent ?? "";
+          }
+          span.contentEditable = "true";
+        });
         const overlayEntry = await getOverlays(documentId);
         if (overlayEntry) {
-          initializeOverlays(overlayEntry.overlays);
+          const normalized = overlayEntry.overlays.map((overlay) => {
+            if (overlay.type === "text") {
+              return {
+                ...overlay,
+                pageIndex: overlay.pageIndex ?? 0,
+                content: overlay.content ?? (overlay as { text?: string }).text ?? "",
+                style: overlay.style ?? {
+                  fontSize:
+                    (overlay as { fontSize?: number }).fontSize ?? 16,
+                  color: (overlay as { color?: string }).color ?? "#111827",
+                },
+              };
+            }
+            return {
+              ...overlay,
+              pageIndex: overlay.pageIndex ?? 0,
+              style: overlay.style ?? {
+                color: (overlay as { color?: string }).color ?? "#fde047",
+                opacity: (overlay as { opacity?: number }).opacity ?? 0.5,
+              },
+            };
+          });
+          initializeOverlays(normalized);
         } else {
           initializeOverlays([]);
         }
-        setStatus("渲染完成。");
+        setStatusKey("editor.status.renderComplete");
       } catch (error) {
         console.error(error);
-        setStatus("渲染失败。");
+        setStatusKey("editor.status.renderFailed");
       }
     };
 
     void load();
-  }, [documentId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [documentId, initializeOverlays]);
+
 
   useEffect(() => {
     if (!documentId) {
       return;
     }
-    void saveOverlays(documentId, overlays);
-  }, [documentId, overlays]);
+    setDocumentId(documentId);
+    void saveOverlays(documentId, overlays, []);
+  }, [documentId, overlays, setDocumentId]);
 
   const handleExport = async () => {
     if (!documentId) {
       return;
     }
-    const entry = await getPdfById(documentId);
-    if (!entry) {
+    const textLayer = textLayerRef.current;
+    const pathLayer = pathLayerRef.current;
+    if (!textLayer || !pathLayer) {
       return;
     }
-    const pdfDoc = await PDFDocument.load(entry.data);
-    const page = pdfDoc.getPage(0);
-    const { width: pdfWidth, height: pdfHeight } = page.getSize();
-    const scaleX = pageSize.width ? pdfWidth / pageSize.width : 1;
-    const scaleY = pageSize.height ? pdfHeight / pageSize.height : 1;
 
-    const parseHexColor = (hex: string) => {
-      const value = hex.replace("#", "");
-      const r = Number.parseInt(value.slice(0, 2), 16) / 255;
-      const g = Number.parseInt(value.slice(2, 4), 16) / 255;
-      const b = Number.parseInt(value.slice(4, 6), 16) / 255;
-      return rgb(r, g, b);
+    await exportHtmlToPdf({
+      filename: `${documentId}-edited.pdf`,
+      textLayer,
+      pathLayer,
+      viewportScale: pageSize.scale || 1,
+      overlays,
+    });
+  };
+
+
+  const handleZoomIn = () => {
+    setZoomScale((prev) => Math.min(2.5, Number((prev + 0.1).toFixed(2))));
+  };
+
+  const handleZoomOut = () => {
+    setZoomScale((prev) => Math.max(0.5, Number((prev - 0.1).toFixed(2))));
+  };
+
+  const handleZoomReset = () => {
+    setZoomScale(1);
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isEditableTarget =
+        event.target instanceof HTMLElement &&
+        (event.target.isContentEditable ||
+          event.target.tagName === "INPUT" ||
+          event.target.tagName === "TEXTAREA");
+
+      if (isEditableTarget) {
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+        return;
+      }
+
+      if (event.key === "Delete" && selectedId) {
+        event.preventDefault();
+        deleteOverlay(selectedId);
+      }
     };
 
-    overlays.forEach((overlay) => {
-      if (overlay.type === "text") {
-        page.drawText(overlay.text, {
-          x: overlay.x * scaleX,
-          y: pdfHeight - (overlay.y + overlay.height) * scaleY,
-          size: overlay.fontSize * scaleY,
-          color: parseHexColor(overlay.color),
-        });
-      }
-      if (overlay.type === "highlight") {
-        page.drawRectangle({
-          x: overlay.x * scaleX,
-          y: pdfHeight - (overlay.y + overlay.height) * scaleY,
-          width: overlay.width * scaleX,
-          height: overlay.height * scaleY,
-          color: parseHexColor(overlay.color),
-          opacity: overlay.opacity,
-        });
-      }
-    });
-
-    const bytes = await pdfDoc.save();
-    const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${documentId}-edited.pdf`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [deleteOverlay, redo, selectedId, undo]);
 
   return (
     <div className="editor-shell">
       <div className="editor-layout">
-        <EditorToolbar onExport={handleExport} />
+        <Toolbar
+          onExport={handleExport}
+          onZoomIn={handleZoomIn}
+          onZoomOut={handleZoomOut}
+          onZoomReset={handleZoomReset}
+          zoomPercent={Math.round(zoomScale * 100)}
+        />
         <div className="editor-body">
-          <Sidebar />
-          <CanvasStage
-            canvasRef={canvasRef}
-            status={status}
+          <Canvas
+            textLayerRef={textLayerRef}
+            pathLayerRef={pathLayerRef}
+            status={t(statusKey)}
             width={pageSize.width}
             height={pageSize.height}
+            zoomPercent={Math.round(zoomScale * 100)}
+            zoomScale={zoomScale}
           />
-          <PropertyPanel />
         </div>
       </div>
     </div>

@@ -1,9 +1,60 @@
-import { getDocument, GlobalWorkerOptions, type PDFPageProxy } from "pdfjs-dist";
+import {
+  getDocument,
+  GlobalWorkerOptions,
+  renderTextLayer,
+  OPS,
+  type PDFPageProxy,
+} from "pdfjs-dist";
 
 GlobalWorkerOptions.workerSrc = "/pdf.worker.js";
 const baseUrl = import.meta.env.BASE_URL ?? "/";
 const cMapUrl = `${baseUrl}cmaps/`;
 const standardFontDataUrl = `${baseUrl}standard_fonts/`;
+
+type Matrix = [number, number, number, number, number, number];
+type RgbColor = { r: number; g: number; b: number };
+type GraphicsState = {
+  strokeColor: RgbColor;
+  fillColor: RgbColor;
+  lineWidth: number;
+  ctm: Matrix;
+};
+
+const IDENTITY_MATRIX: Matrix = [1, 0, 0, 1, 0, 0];
+const DEFAULT_STROKE: RgbColor = { r: 0, g: 0, b: 0 };
+const DEFAULT_FILL: RgbColor = { r: 0, g: 0, b: 0 };
+
+const clamp = (value: number) => Math.max(0, Math.min(1, value));
+
+const multiplyMatrix = (m1: Matrix, m2: Matrix): Matrix => [
+  m1[0] * m2[0] + m1[2] * m2[1],
+  m1[1] * m2[0] + m1[3] * m2[1],
+  m1[0] * m2[2] + m1[2] * m2[3],
+  m1[1] * m2[2] + m1[3] * m2[3],
+  m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+  m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+];
+
+const applyMatrix = (m: Matrix, x: number, y: number) => ({
+  x: m[0] * x + m[2] * y + m[4],
+  y: m[1] * x + m[3] * y + m[5],
+});
+
+const matrixScale = (m: Matrix) => Math.sqrt(Math.max(1e-6, Math.abs(m[0] * m[3] - m[1] * m[2])));
+
+const rgbCss = ({ r, g, b }: RgbColor) =>
+  `rgb(${Math.round(clamp(r) * 255)},${Math.round(clamp(g) * 255)},${Math.round(clamp(b) * 255)})`;
+
+const cmykToRgb = (c: number, m: number, y: number, k: number): RgbColor => ({
+  r: clamp(1 - Math.min(1, c + k)),
+  g: clamp(1 - Math.min(1, m + k)),
+  b: clamp(1 - Math.min(1, y + k)),
+});
+
+const normalizeRotation = (rotation: number) => {
+  const normalized = ((rotation % 360) + 360) % 360;
+  return normalized;
+};
 
 export const loadPdfPage = async (data: ArrayBuffer, pageNumber = 1) => {
   const loadingTask = getDocument({
@@ -17,11 +68,6 @@ export const loadPdfPage = async (data: ArrayBuffer, pageNumber = 1) => {
   const pdf = await loadingTask.promise;
   const page = await pdf.getPage(pageNumber);
   return page;
-};
-
-const normalizeRotation = (rotation: number) => {
-  const normalized = ((rotation % 360) + 360) % 360;
-  return normalized;
 };
 
 export const getPageViewport = (page: PDFPageProxy, scale: number) => {
@@ -44,6 +90,335 @@ export const renderPage = async (
   canvas.height = viewport.height;
   await page.render({ canvasContext: context, viewport }).promise;
   return { width: viewport.width, height: viewport.height, scale };
+};
+
+export const renderTextLayerForPage = async (
+  page: PDFPageProxy,
+  container: HTMLDivElement,
+  scale = 1.2,
+) => {
+  const viewport = getPageViewport(page, scale);
+  container.innerHTML = "";
+  container.style.setProperty("--scale-factor", `${viewport.scale}`);
+  container.style.width = `${viewport.width}px`;
+  container.style.height = `${viewport.height}px`;
+  const textContent = await (page as any).getTextContent();
+  const textDivs: HTMLElement[] = [];
+  const task = renderTextLayer({
+    textContentSource: textContent,
+    container,
+    viewport,
+    textDivs,
+    enhanceTextSelection: false,
+  });
+  if (task?.promise) {
+    await task.promise;
+  }
+};
+
+const buildSvgPathElement = (
+  svg: SVGElement,
+  d: string,
+  mode: "stroke" | "fill" | "fillStroke",
+  state: GraphicsState,
+  viewportMatrix: Matrix,
+) => {
+  if (!d.trim()) {
+    return;
+  }
+
+  const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  pathEl.setAttribute("d", d.trim());
+
+  const combined = multiplyMatrix(viewportMatrix, state.ctm);
+  pathEl.setAttribute("transform", `matrix(${combined.join(" ")})`);
+
+  const strokeWidth = Math.max(0.1, state.lineWidth * matrixScale(combined));
+  pathEl.setAttribute("stroke-width", `${strokeWidth}`);
+
+  if (mode === "stroke") {
+    pathEl.setAttribute("fill", "none");
+    pathEl.setAttribute("stroke", rgbCss(state.strokeColor));
+  } else if (mode === "fill") {
+    pathEl.setAttribute("fill", rgbCss(state.fillColor));
+    pathEl.setAttribute("stroke", "none");
+  } else {
+    pathEl.setAttribute("fill", rgbCss(state.fillColor));
+    pathEl.setAttribute("stroke", rgbCss(state.strokeColor));
+  }
+
+  svg.appendChild(pathEl);
+};
+
+const resolveImageDataUrl = async (page: any, objectId: string) => {
+  const fromObj = page?.objs?.get?.(objectId) ?? page?.commonObjs?.get?.(objectId);
+  if (!fromObj) {
+    return null;
+  }
+
+  const imageData = fromObj.data ?? fromObj;
+  const width = imageData.width;
+  const height = imageData.height;
+  const pixels = imageData.data;
+
+  if (!width || !height || !pixels) {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return null;
+  }
+
+  const imageBuffer =
+    pixels instanceof Uint8ClampedArray ? pixels : new Uint8ClampedArray(pixels.buffer ?? pixels);
+  if (imageBuffer.length < width * height * 4) {
+    return null;
+  }
+
+  const img = new ImageData(imageBuffer, width, height);
+  ctx.putImageData(img, 0, 0);
+  return canvas.toDataURL("image/png");
+};
+
+export const renderPathLayerForPage = async (
+  page: PDFPageProxy,
+  container: HTMLDivElement,
+  scale = 1.2,
+) => {
+  const viewport = getPageViewport(page, scale);
+  container.innerHTML = "";
+  container.style.width = `${viewport.width}px`;
+  container.style.height = `${viewport.height}px`;
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", "100%");
+  svg.setAttribute("height", "100%");
+  svg.setAttribute("viewBox", `0 0 ${viewport.width} ${viewport.height}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.style.position = "absolute";
+  svg.style.inset = "0";
+
+  const viewportMatrix = (viewport as any).transform as Matrix;
+  const opList = await (page as any).getOperatorList();
+  const fnArray = opList?.fnArray ?? [];
+  const argsArray = opList?.argsArray ?? [];
+
+  let state: GraphicsState = {
+    strokeColor: { ...DEFAULT_STROKE },
+    fillColor: { ...DEFAULT_FILL },
+    lineWidth: 1,
+    ctm: [...IDENTITY_MATRIX],
+  };
+  const stateStack: GraphicsState[] = [];
+
+  let path = "";
+  let currentX = 0;
+  let currentY = 0;
+
+  const flush = (mode: "stroke" | "fill" | "fillStroke") => {
+    buildSvgPathElement(svg, path, mode, state, viewportMatrix);
+    path = "";
+  };
+
+  const opSave = (OPS as any).save;
+  const opRestore = (OPS as any).restore;
+  const opTransform = (OPS as any).transform;
+  const opSetStrokeRGB = (OPS as any).setStrokeRGBColor;
+  const opSetFillRGB = (OPS as any).setFillRGBColor;
+  const opSetStrokeGray = (OPS as any).setStrokeGray;
+  const opSetFillGray = (OPS as any).setFillGray;
+  const opSetStrokeCMYK = (OPS as any).setStrokeCMYKColor;
+  const opSetFillCMYK = (OPS as any).setFillCMYKColor;
+  const opSetLineWidth = (OPS as any).setLineWidth;
+  const opMoveTo = (OPS as any).moveTo;
+  const opLineTo = (OPS as any).lineTo;
+  const opCurveTo = (OPS as any).curveTo;
+  const opCurveTo2 = (OPS as any).curveTo2;
+  const opCurveTo3 = (OPS as any).curveTo3;
+  const opClosePath = (OPS as any).closePath;
+  const opRectangle = (OPS as any).rectangle;
+  const opStroke = (OPS as any).stroke;
+  const opCloseStroke = (OPS as any).closeStroke;
+  const opFill = (OPS as any).fill;
+  const opEoFill = (OPS as any).eoFill;
+  const opFillStroke = (OPS as any).fillStroke;
+  const opEoFillStroke = (OPS as any).eoFillStroke;
+  const opCloseFillStroke = (OPS as any).closeFillStroke;
+  const opCloseEoFillStroke = (OPS as any).closeEOFillStroke;
+  const opPaintImage = (OPS as any).paintImageXObject;
+  const opPaintJpeg = (OPS as any).paintJpegXObject;
+
+  for (let i = 0; i < fnArray.length; i += 1) {
+    const fn = fnArray[i];
+    const args = argsArray[i] ?? [];
+
+    if (fn === opSave) {
+      stateStack.push({
+        strokeColor: { ...state.strokeColor },
+        fillColor: { ...state.fillColor },
+        lineWidth: state.lineWidth,
+        ctm: [...state.ctm],
+      });
+      continue;
+    }
+
+    if (fn === opRestore) {
+      const previous = stateStack.pop();
+      if (previous) {
+        state = previous;
+      }
+      continue;
+    }
+
+    if (fn === opTransform) {
+      const [a, b, c, d, e, f] = args;
+      state = {
+        ...state,
+        ctm: multiplyMatrix(state.ctm, [a, b, c, d, e, f]),
+      };
+      continue;
+    }
+
+    if (fn === opSetStrokeRGB) {
+      const [r, g, b] = args;
+      state = { ...state, strokeColor: { r: clamp(r), g: clamp(g), b: clamp(b) } };
+      continue;
+    }
+
+    if (fn === opSetFillRGB) {
+      const [r, g, b] = args;
+      state = { ...state, fillColor: { r: clamp(r), g: clamp(g), b: clamp(b) } };
+      continue;
+    }
+
+    if (fn === opSetStrokeGray) {
+      const [g] = args;
+      state = { ...state, strokeColor: { r: clamp(g), g: clamp(g), b: clamp(g) } };
+      continue;
+    }
+
+    if (fn === opSetFillGray) {
+      const [g] = args;
+      state = { ...state, fillColor: { r: clamp(g), g: clamp(g), b: clamp(g) } };
+      continue;
+    }
+
+    if (fn === opSetStrokeCMYK) {
+      const [c, m, y, k] = args;
+      state = { ...state, strokeColor: cmykToRgb(c, m, y, k) };
+      continue;
+    }
+
+    if (fn === opSetFillCMYK) {
+      const [c, m, y, k] = args;
+      state = { ...state, fillColor: cmykToRgb(c, m, y, k) };
+      continue;
+    }
+
+    if (fn === opSetLineWidth) {
+      state = { ...state, lineWidth: Number(args[0] ?? 1) || 1 };
+      continue;
+    }
+
+    if (fn === opMoveTo) {
+      const [x, y] = args;
+      currentX = x;
+      currentY = y;
+      path += `M ${x} ${y} `;
+      continue;
+    }
+
+    if (fn === opLineTo) {
+      const [x, y] = args;
+      currentX = x;
+      currentY = y;
+      path += `L ${x} ${y} `;
+      continue;
+    }
+
+    if (fn === opCurveTo) {
+      const [x1, y1, x2, y2, x3, y3] = args;
+      currentX = x3;
+      currentY = y3;
+      path += `C ${x1} ${y1} ${x2} ${y2} ${x3} ${y3} `;
+      continue;
+    }
+
+    if (fn === opCurveTo2) {
+      const [x2, y2, x3, y3] = args;
+      path += `C ${currentX} ${currentY} ${x2} ${y2} ${x3} ${y3} `;
+      currentX = x3;
+      currentY = y3;
+      continue;
+    }
+
+    if (fn === opCurveTo3) {
+      const [x1, y1, x3, y3] = args;
+      path += `C ${x1} ${y1} ${x3} ${y3} ${x3} ${y3} `;
+      currentX = x3;
+      currentY = y3;
+      continue;
+    }
+
+    if (fn === opRectangle) {
+      const [x, y, w, h] = args;
+      path += `M ${x} ${y} L ${x + w} ${y} L ${x + w} ${y + h} L ${x} ${y + h} Z `;
+      currentX = x;
+      currentY = y;
+      continue;
+    }
+
+    if (fn === opClosePath) {
+      path += "Z ";
+      continue;
+    }
+
+    if (fn === opStroke || fn === opCloseStroke) {
+      flush("stroke");
+      continue;
+    }
+
+    if (fn === opFill || fn === opEoFill) {
+      flush("fill");
+      continue;
+    }
+
+    if (
+      fn === opFillStroke ||
+      fn === opEoFillStroke ||
+      fn === opCloseFillStroke ||
+      fn === opCloseEoFillStroke
+    ) {
+      flush("fillStroke");
+      continue;
+    }
+
+    if (fn === opPaintImage || fn === opPaintJpeg) {
+      const objectId = String(args[0] ?? "");
+      const dataUrl = await resolveImageDataUrl(page, objectId);
+      if (!dataUrl) {
+        continue;
+      }
+
+      const imageNode = document.createElementNS("http://www.w3.org/2000/svg", "image");
+      const ctm = multiplyMatrix(viewportMatrix, state.ctm);
+      imageNode.setAttributeNS("http://www.w3.org/1999/xlink", "href", dataUrl);
+      imageNode.setAttribute("x", "0");
+      imageNode.setAttribute("y", "-1");
+      imageNode.setAttribute("width", "1");
+      imageNode.setAttribute("height", "1");
+      imageNode.setAttribute("preserveAspectRatio", "none");
+      imageNode.setAttribute("transform", `matrix(${ctm.join(" ")})`);
+      svg.appendChild(imageNode);
+      continue;
+    }
+  }
+
+  container.appendChild(svg);
 };
 
 export const renderFirstPage = async (

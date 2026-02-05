@@ -26,21 +26,71 @@ body {
 }
 
 .editor-shell {
-  @apply h-screen w-screen overflow-hidden bg-background text-foreground;
+  @apply h-screen w-screen overflow-hidden text-foreground;
+  background-color: #d7dade;
+  background-image:
+    radial-gradient(circle at 20% 15%, rgba(255, 255, 255, 0.25) 0, rgba(255, 255, 255, 0.1) 28%, transparent 45%),
+    radial-gradient(circle at 80% 75%, rgba(255, 255, 255, 0.2) 0, rgba(255, 255, 255, 0.06) 30%, transparent 52%),
+    radial-gradient(circle at 35% 60%, rgba(0, 0, 0, 0.05) 0, transparent 40%),
+    repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.03) 0 1.5px, rgba(0, 0, 0, 0.03) 1.5px 3px);
 }
 
 .editor-layout {
-  @apply grid h-full grid-rows-[auto_1fr];
+  @apply flex h-full flex-col;
 }
 
 .editor-body {
-  @apply grid h-full grid-cols-[240px_1fr_280px];
+  @apply flex h-full items-center justify-center overflow-auto px-6 pb-20 pt-4;
 }
 
 .canvas-stage {
-  @apply relative h-full overflow-auto bg-muted;
+  @apply relative flex h-full w-full items-center justify-center;
+}
+
+.pdf-status {
+  @apply pointer-events-none absolute left-4 top-3 text-xs text-foreground/55;
+}
+
+.pdf-page-shell {
+  @apply relative origin-center rounded-sm bg-white shadow-[0_20px_50px_rgba(15,23,42,0.2)] transition-transform;
+  max-width: min(95vw, 860px);
 }
 
 .canvas-layer {
-  @apply absolute left-0 top-0;
+  @apply absolute left-0 top-0 z-10;
+}
+
+.pdf-text-layer {
+  @apply absolute left-0 top-0 z-20;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.pdf-text-layer span {
+  position: absolute;
+  white-space: pre;
+  transform-origin: 0 0;
+  color: #111827;
+  caret-color: #111827;
+  pointer-events: auto;
+  outline: none;
+}
+
+.pdf-text-layer span.is-editing {
+  user-select: text;
+  outline: none;
+}
+
+.pdf-path-layer {
+  @apply absolute left-0 top-0 z-10;
+  pointer-events: none;
+}
+
+.canvas-layer [contenteditable][data-placeholder]:empty:before {
+  content: attr(data-placeholder);
+  @apply text-muted-foreground;
+}
+
+.pdf-text-layer span[data-text-id]:hover {
+  background-color: transparent;
 }

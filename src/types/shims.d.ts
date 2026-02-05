@@ -38,6 +38,7 @@ declare module "react" {
     currentTarget: T;
     clientX: number;
     clientY: number;
+    stopPropagation: () => void;
   }
 
   export interface ChangeEvent<T = Element> {
@@ -64,6 +65,8 @@ declare module "react" {
     deps: ReadonlyArray<unknown>,
   ): T;
   export function useRef<T>(initial: T): { current: T };
+  export function createContext<T>(defaultValue: T): any;
+  export function useContext<T>(context: any): T;
   export function forwardRef<T, P = {}>(
     render: (props: P, ref: Ref<T>) => ReactNode,
   ): ((props: P & { ref?: Ref<T> }) => ReactNode) & {
@@ -121,15 +124,25 @@ declare module "react-router-dom" {
 }
 
 declare module "pdf-lib" {
+  type PdfPage = {
+    getSize(): { width: number; height: number };
+    drawText: (text: string, options: any) => void;
+    drawRectangle: (options: any) => void;
+    drawSvgPath: (path: string, options: any) => void;
+  };
+
   export class PDFDocument {
     static load(data: ArrayBuffer): Promise<PDFDocument>;
-    getPage(index: number): {
-      getSize(): { width: number; height: number };
-      drawText: (text: string, options: any) => void;
-      drawRectangle: (options: any) => void;
-    };
+    static create(): Promise<PDFDocument>;
+    getPage(index: number): PdfPage;
+    addPage(size?: [number, number]): PdfPage;
+    embedFont(font: string): Promise<any>;
     save(): Promise<Uint8Array>;
   }
+
+  export const StandardFonts: {
+    Helvetica: string;
+  };
 
   export function rgb(
     r: number,
@@ -139,19 +152,58 @@ declare module "pdf-lib" {
 }
 
 declare module "pdfjs-dist" {
+  export type PDFViewport = {
+    width: number;
+    height: number;
+    scale: number;
+    convertToViewportPoint?: (x: number, y: number) => number[];
+    convertToViewportRectangle?: (rect: number[]) => number[];
+  };
+
   export type PDFPageProxy = {
     getViewport: (options: {
       scale: number;
       rotation?: number;
-    }) => { width: number; height: number };
+    }) => PDFViewport;
     rotate?: number;
     render: (options: {
       canvasContext: CanvasRenderingContext2D;
-      viewport: { width: number; height: number };
+      viewport: PDFViewport;
     }) => { promise: Promise<void> };
+    getTextContent?: () => Promise<{ items: unknown[] }>;
+    getOperatorList?: () => Promise<{ fnArray: number[]; argsArray: unknown[] }>;
   };
 
   export const GlobalWorkerOptions: { workerSrc: string };
+
+  export function renderTextLayer(params: {
+    textContentSource: unknown;
+    container: HTMLElement;
+    viewport: PDFViewport;
+    textDivs?: HTMLElement[];
+    enhanceTextSelection?: boolean;
+  }): { promise?: Promise<void> };
+
+  export const OPS: {
+    moveTo: number;
+    lineTo: number;
+    curveTo: number;
+    curveTo2: number;
+    curveTo3: number;
+    closePath: number;
+    rectangle: number;
+    stroke: number;
+    closeStroke: number;
+    fill: number;
+    eoFill: number;
+    fillStroke: number;
+    eoFillStroke: number;
+    closeFillStroke: number;
+    closeEOFillStroke: number;
+    setStrokeRGBColor: number;
+    setFillRGBColor: number;
+    setLineWidth: number;
+  };
 
   export function getDocument(options: {
     data: ArrayBuffer;
@@ -171,6 +223,7 @@ declare module "zustand" {
   export type StoreHook<T> = {
     (): T;
     <U>(selector: (state: T) => U): U;
+    getState: () => T;
   };
 
   export type SetState<T> = (
@@ -239,6 +292,10 @@ declare module "lucide-react" {
   export const Highlighter: any;
   export const MousePointer2: any;
   export const Download: any;
+  export const Languages: any;
+  export const ZoomIn: any;
+  export const ZoomOut: any;
+  export const PencilLine: any;
 }
 
 declare module "react/jsx-runtime" {

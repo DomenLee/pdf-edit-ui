@@ -1,22 +1,14 @@
-import { useMemo, useRef, useState } from "react";
-import { OverlayItem } from "./types";
-import { useEditorStore } from "../state/editorStore";
+import { useMemo, useState } from "react";
+import { OverlayObject } from "./objects/types";
+import { useToolStore } from "../state/toolStore";
+import { useOverlayStore } from "../state/overlayStore";
 import { cn } from "../components/ui/utils";
+import { useI18nStore } from "../i18n/i18nStore";
 
 type OverlayLayerProps = {
   width: number;
   height: number;
 };
-
-type DragState =
-  | {
-      id: string;
-      originX: number;
-      originY: number;
-      startX: number;
-      startY: number;
-    }
-  | undefined;
 
 type HighlightDraft = {
   startX: number;
@@ -26,21 +18,24 @@ type HighlightDraft = {
 };
 
 export const OverlayLayer = ({ width, height }: OverlayLayerProps) => {
-  const {
-    overlays,
-    currentTool,
-    addOverlay,
-    updateOverlay,
-    updateOverlayLive,
-    commitHistory,
-  } = useEditorStore();
+  const overlays = useOverlayStore((state) => state.overlays);
+  const selectedId = useOverlayStore((state) => state.selectedId);
+  const addOverlay = useOverlayStore((state) => state.addOverlay);
+  const updateOverlay = useOverlayStore((state) => state.updateOverlay);
+  const updateOverlayLive = useOverlayStore((state) => state.updateOverlayLive);
+  const commitHistory = useOverlayStore((state) => state.commitHistory);
+  const setSelectedId = useOverlayStore((state) => state.setSelectedId);
+  const clearSelected = useOverlayStore((state) => state.clearSelected);
+  const activeTool = useToolStore((state) => state.activeTool);
+  const { t } = useI18nStore((state) => ({
+    t: state.t,
+    locale: state.locale,
+  }));
   const [draft, setDraft] = useState<HighlightDraft | null>(null);
-  const dragRef = useRef<DragState>(undefined);
-
   const handleStagePointerDown = (
     event: React.PointerEvent<HTMLDivElement>,
   ) => {
-    if (currentTool !== "highlight") {
+    if (activeTool !== "highlight") {
       return;
     }
 
@@ -75,40 +70,52 @@ export const OverlayLayer = ({ width, height }: OverlayLayerProps) => {
       addOverlay({
         id: crypto.randomUUID(),
         type: "highlight",
+        pageIndex: 0,
         x,
         y,
         width,
         height,
-        color: "#fde047",
-        opacity: 0.5,
+        style: {
+          color: "#fde047",
+          opacity: 0.5,
+        },
       });
     }
     setDraft(null);
   };
 
   const handleStageClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (currentTool !== "text") {
+    if (activeTool === "select") {
+      clearSelected();
       return;
     }
 
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    if (activeTool === "text") {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
 
-    addOverlay({
-      id: crypto.randomUUID(),
-      type: "text",
-      x,
-      y,
-      width: 180,
-      height: 32,
-      text: "双击编辑文本",
-      fontSize: 16,
-      color: "#111827",
-    });
+      addOverlay({
+        id: crypto.randomUUID(),
+        type: "text",
+        pageIndex: 0,
+        x,
+        y,
+        width: 180,
+        height: 32,
+        content: "",
+        style: {
+          fontSize: 16,
+          color: "#111827",
+        },
+      });
+    }
   };
 
-  const overlaysToRender = useMemo(() => overlays, [overlays]);
+  const overlaysToRender = useMemo(
+    () => overlays.filter((overlay) => overlay.pageIndex === 0),
+    [overlays],
+  );
 
   return (
     <div
@@ -124,7 +131,10 @@ export const OverlayLayer = ({ width, height }: OverlayLayerProps) => {
         <OverlayItemView
           key={overlay.id}
           overlay={overlay}
-          isSelectable={currentTool === "select"}
+          isSelectable={activeTool === "select"}
+          isSelected={selectedId === overlay.id}
+          placeholder={t("editor.textPlaceholder")}
+          onSelect={setSelectedId}
           onUpdate={updateOverlay}
           onUpdateLive={updateOverlayLive}
           onCommit={commitHistory}
@@ -146,16 +156,22 @@ export const OverlayLayer = ({ width, height }: OverlayLayerProps) => {
 };
 
 type OverlayItemViewProps = {
-  overlay: OverlayItem;
+  overlay: OverlayObject;
   isSelectable: boolean;
-  onUpdate: (id: string, patch: Partial<OverlayItem>) => void;
-  onUpdateLive: (id: string, patch: Partial<OverlayItem>) => void;
+  isSelected: boolean;
+  placeholder: string;
+  onSelect: (id: string | null) => void;
+  onUpdate: (id: string, patch: Partial<OverlayObject>) => void;
+  onUpdateLive: (id: string, patch: Partial<OverlayObject>) => void;
   onCommit: () => void;
 };
 
 const OverlayItemView = ({
   overlay,
   isSelectable,
+  isSelected,
+  placeholder,
+  onSelect,
   onUpdate,
   onUpdateLive,
   onCommit,
@@ -165,13 +181,19 @@ const OverlayItemView = ({
       return;
     }
     event.stopPropagation();
+    onSelect(overlay.id);
     const startX = event.clientX;
     const startY = event.clientY;
     const originX = overlay.x;
     const originY = overlay.y;
+    let hasMoved = false;
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const deltaX = moveEvent.clientX - startX;
       const deltaY = moveEvent.clientY - startY;
+      if (!hasMoved) {
+        onCommit();
+        hasMoved = true;
+      }
       onUpdateLive(overlay.id, {
         x: originX + deltaX,
         y: originY + deltaY,
@@ -180,7 +202,6 @@ const OverlayItemView = ({
     const handlePointerUp = () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
-      onCommit();
     };
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
@@ -189,14 +210,17 @@ const OverlayItemView = ({
   if (overlay.type === "highlight") {
     return (
       <div
-        className={cn("absolute rounded-md border border-amber-500/70")}
+        className={cn(
+          "absolute rounded-md border",
+          isSelected ? "border-primary" : "border-amber-500/70",
+        )}
         style={{
           left: overlay.x,
           top: overlay.y,
           width: overlay.width,
           height: overlay.height,
-          backgroundColor: overlay.color,
-          opacity: overlay.opacity,
+          backgroundColor: overlay.style?.color ?? "#fde047",
+          opacity: overlay.style?.opacity ?? 0.5,
         }}
         onPointerDown={handlePointerDown}
       />
@@ -205,23 +229,35 @@ const OverlayItemView = ({
 
   return (
     <div
-      className="absolute rounded-md border border-transparent bg-white/80 px-2 py-1 shadow-sm"
+      className={cn(
+        "absolute rounded-md border bg-white/80 px-2 py-1 shadow-sm focus:outline-none",
+        isSelected ? "border-primary" : "border-transparent",
+      )}
       style={{
         left: overlay.x,
         top: overlay.y,
         width: overlay.width,
         minHeight: overlay.height,
-        color: overlay.color,
-        fontSize: overlay.fontSize,
+        color: overlay.style?.color ?? "#111827",
+        fontSize: overlay.style?.fontSize ?? 16,
       }}
       onPointerDown={handlePointerDown}
+      onClick={(event) => {
+        if (isSelectable) {
+          event.stopPropagation();
+          onSelect(overlay.id);
+        }
+      }}
       contentEditable
+      data-placeholder={placeholder}
       suppressContentEditableWarning
       onBlur={(event) =>
-        onUpdate(overlay.id, { text: event.currentTarget.textContent ?? "" })
+        onUpdate(overlay.id, {
+          content: event.currentTarget.textContent ?? "",
+        })
       }
     >
-      {overlay.text}
+      {overlay.content}
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import { openDB } from "idb";
-import { OverlayItem } from "../overlay/types";
+import { EditedTextItem, OverlayObject } from "../overlay/objects/types";
 
 const DB_NAME = "pdf-editor-db";
 const STORE_NAME = "pdfs";
@@ -44,15 +44,22 @@ export const getPdfById = async (id: string) => {
 
 export type StoredOverlays = {
   id: string;
-  overlays: OverlayItem[];
+  overlays: OverlayObject[];
+  editedTextItems?: EditedTextItem[];
+  nativeTextReplacements?: EditedTextItem[];
   updatedAt: number;
 };
 
-export const saveOverlays = async (id: string, overlays: OverlayItem[]) => {
+export const saveOverlays = async (
+  id: string,
+  overlays: OverlayObject[],
+  editedTextItems: EditedTextItem[] = [],
+) => {
   const db = await dbPromise;
   const entry: StoredOverlays = {
     id,
     overlays,
+    editedTextItems,
     updatedAt: Date.now(),
   };
   await db.put(OVERLAY_STORE, entry);
