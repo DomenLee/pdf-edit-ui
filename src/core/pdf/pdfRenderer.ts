@@ -76,10 +76,119 @@ export const renderTextLayerForPage = async (
   }
 };
 
+
+const createSvgLine = (
+  svg: SVGElement,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+) => {
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  line.setAttribute("x1", `${x1}`);
+  line.setAttribute("y1", `${y1}`);
+  line.setAttribute("x2", `${x2}`);
+  line.setAttribute("y2", `${y2}`);
+  line.setAttribute("stroke", "#000");
+  line.setAttribute("stroke-width", "1");
+  svg.appendChild(line);
+};
+
+const drawInvoiceStructure = (
+  svg: SVGElement,
+  pathLayer: HTMLDivElement,
+  textLayer?: HTMLDivElement,
+) => {
+  const width = pathLayer.clientWidth;
+  const height = pathLayer.clientHeight;
+  if (!width || !height) {
+    return;
+  }
+
+  const border = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  border.setAttribute("x", "1");
+  border.setAttribute("y", "1");
+  border.setAttribute("width", `${Math.max(0, width - 2)}`);
+  border.setAttribute("height", `${Math.max(0, height - 2)}`);
+  border.setAttribute("fill", "none");
+  border.setAttribute("stroke", "#000");
+  border.setAttribute("stroke-width", "1");
+  svg.appendChild(border);
+
+  if (!textLayer) {
+    return;
+  }
+
+  const spans = Array.from(textLayer.querySelectorAll("span"));
+  if (!spans.length) {
+    return;
+  }
+
+  const layerRect = textLayer.getBoundingClientRect();
+  const headers = ["项目名称", "货物或应税劳务、服务名称", "单价", "数量", "金额", "税率", "税额"];
+  const headerSpans = spans.filter((span) => {
+    const text = (span.textContent ?? "").replace(/\s+/g, "");
+    return headers.some((label) => text.includes(label));
+  });
+
+  if (!headerSpans.length) {
+    return;
+  }
+
+  const headerRects = headerSpans.map((span) => span.getBoundingClientRect());
+  const tableLeft = Math.max(1, Math.min(...headerRects.map((rect) => rect.left - layerRect.left)) - 8);
+  const tableRight = Math.min(
+    width - 1,
+    Math.max(...headerRects.map((rect) => rect.right - layerRect.left)) + 8,
+  );
+  const headerBottom = Math.max(...headerRects.map((rect) => rect.bottom - layerRect.top));
+
+  const totalSpan = spans.find((span) => {
+    const text = (span.textContent ?? "").replace(/\s+/g, "");
+    return text.includes("合计") || text.includes("价税合计");
+  });
+
+  const totalTop = totalSpan
+    ? totalSpan.getBoundingClientRect().top - layerRect.top
+    : Math.min(height - 4, headerBottom + 220);
+
+  createSvgLine(svg, tableLeft, headerBottom + 2, tableRight, headerBottom + 2);
+
+  const rowSpans = spans.filter((span) => {
+    const rect = span.getBoundingClientRect();
+    const top = rect.top - layerRect.top;
+    const left = rect.left - layerRect.left;
+    const right = rect.right - layerRect.left;
+    return top > headerBottom + 3 && top < totalTop - 2 && right > tableLeft && left < tableRight;
+  });
+
+  const rowBottoms = rowSpans
+    .map((span) => span.getBoundingClientRect().bottom - layerRect.top)
+    .sort((a, b) => a - b);
+
+  const groupedBottoms: number[] = [];
+  rowBottoms.forEach((value) => {
+    const last = groupedBottoms[groupedBottoms.length - 1];
+    if (last === undefined || Math.abs(last - value) > 7) {
+      groupedBottoms.push(value);
+    }
+  });
+
+  groupedBottoms.forEach((lineY) => {
+    if (lineY < totalTop - 4) {
+      createSvgLine(svg, tableLeft, lineY + 2, tableRight, lineY + 2);
+    }
+  });
+
+  const totalLineY = Math.max(headerBottom + 6, totalTop - 2);
+  createSvgLine(svg, tableLeft, totalLineY, tableRight, totalLineY);
+};
+
 export const renderPathLayerForPage = async (
   page: PDFPageProxy,
   container: HTMLDivElement,
   scale = 1.2,
+  textLayer?: HTMLDivElement,
 ) => {
   const viewport = getPageViewport(page, scale);
   container.innerHTML = "";
@@ -210,6 +319,7 @@ export const renderPathLayerForPage = async (
     }
   }
 
+  drawInvoiceStructure(svg, container, textLayer);
   container.appendChild(svg);
 };
 

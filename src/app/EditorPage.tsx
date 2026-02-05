@@ -69,7 +69,7 @@ export const EditorPage = () => {
         const viewport = getPageViewport(page, scale);
         setPageSize({ width: viewport.width, height: viewport.height, scale });
         await renderTextLayerForPage(page, textLayerRef.current, scale);
-        await renderPathLayerForPage(page, pathLayerRef.current, scale);
+        await renderPathLayerForPage(page, pathLayerRef.current, scale, textLayerRef.current);
         const spans = textLayerRef.current.querySelectorAll("span");
         spans.forEach((span, index) => {
           span.dataset.textId = span.dataset.textId ?? `text-${index}`;
