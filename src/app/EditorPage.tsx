@@ -14,9 +14,9 @@ import { exportHtmlToPdf } from "../core/export/htmlToPdf";
 
 export const EditorPage = () => {
   const { id } = useParams();
+  const pageCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
   const [statusKey, setStatusKey] = useState("editor.status.loading");
-  const [backgroundImageUrl, setBackgroundImageUrl] = useState("");
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
   const [zoomScale, setZoomScale] = useState(1);
   const documentId = useMemo(() => id ?? "", [id]);
@@ -46,7 +46,7 @@ export const EditorPage = () => {
         return;
       }
 
-      if (!textLayerRef.current) {
+      if (!textLayerRef.current || !pageCanvasRef.current) {
         setStatusKey("editor.status.canvasNotReady");
         requestAnimationFrame(() => {
           if (!cancelled) {
@@ -65,8 +65,7 @@ export const EditorPage = () => {
       try {
         const page = await loadPdfPage(entry.data, 1);
         const scale = 1.1;
-        const rendered = await renderPage(page, scale);
-        setBackgroundImageUrl(rendered.backgroundImageDataUrl);
+        const rendered = await renderPage(page, pageCanvasRef.current, scale);
         setPageSize({ width: rendered.width, height: rendered.height, scale });
         await renderTextLayerForPage(page, textLayerRef.current, rendered.pageHeight, scale);
         const overlayEntry = await getOverlays(documentId);
@@ -124,14 +123,15 @@ export const EditorPage = () => {
       return;
     }
     const textLayer = textLayerRef.current;
-    if (!textLayer || !backgroundImageUrl) {
+    const pageCanvas = pageCanvasRef.current;
+    if (!textLayer || !pageCanvas) {
       return;
     }
 
     await exportHtmlToPdf({
       filename: `${documentId}-edited.pdf`,
       textLayer,
-      backgroundImageUrl,
+      pageCanvas,
       viewportScale: pageSize.scale || 1,
       overlays,
     });
@@ -194,7 +194,7 @@ export const EditorPage = () => {
         />
         <div className="editor-body">
           <Canvas
-            backgroundImageUrl={backgroundImageUrl}
+            pageCanvasRef={pageCanvasRef}
             textLayerRef={textLayerRef}
             status={t(statusKey)}
             width={pageSize.width}

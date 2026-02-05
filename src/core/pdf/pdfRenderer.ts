@@ -96,10 +96,10 @@ export const getPageViewport = (page: PDFPageProxy, scale: number) => {
 
 export const renderPage = async (
   page: PDFPageProxy,
+  canvas: HTMLCanvasElement,
   scale = 1.2,
 ) => {
   const viewport = getPageViewport(page, scale);
-  const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
   if (!context) {
     throw new Error("无法获取 2D Context");
@@ -143,13 +143,11 @@ export const renderPage = async (
     } as any)
     .promise;
 
-  const backgroundImageDataUrl = canvas.toDataURL("image/png");
   return {
     width: viewport.width,
     height: viewport.height,
     scale,
     pageHeight: ((page as any).view?.[3] ?? viewport.height / scale) - ((page as any).view?.[1] ?? 0),
-    backgroundImageDataUrl,
   };
 };
 
@@ -270,7 +268,8 @@ const createTextLayerDescriptors = (
     return {
       text: group.text,
       transform: `translate(${x}px, ${y}px) rotate(${group.angleRad}rad)`,
-      fontSizePx: group.fontSizePdf * scale,
+      // 放大 2% 用于覆盖 Canvas glyph 的抗锯齿边缘像素，避免重影边缘。
+      fontSizePx: group.fontSizePdf * scale * 1.02,
       fontFamily: group.fontName,
       color: group.color,
       textId: `text-${index}`,
@@ -633,7 +632,8 @@ export const renderPathLayerForPage = async (
 
 export const renderFirstPage = async (
   data: ArrayBuffer,
+  canvas: HTMLCanvasElement,
 ) => {
   const page = await loadPdfPage(data, 1);
-  return renderPage(page);
+  return renderPage(page, canvas);
 };
