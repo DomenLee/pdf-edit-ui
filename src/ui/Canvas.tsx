@@ -2,8 +2,10 @@ import { RefObject, useEffect, useState } from "react";
 import { cn } from "../components/ui/utils";
 
 type CanvasProps = {
+  canvasRef: RefObject<HTMLCanvasElement>;
   textLayerRef: RefObject<HTMLDivElement>;
   pathLayerRef: RefObject<HTMLDivElement>;
+  stampLayerRef: RefObject<HTMLDivElement>;
   status: string;
   width: number;
   height: number;
@@ -12,8 +14,10 @@ type CanvasProps = {
 };
 
 export const Canvas = ({
+  canvasRef,
   textLayerRef,
   pathLayerRef,
+  stampLayerRef,
   status,
   width,
   height,
@@ -47,9 +51,19 @@ export const Canvas = ({
         >
           {zoomPercent}%
         </div>
+        <canvas
+          ref={canvasRef}
+          className="pdf-canvas-bg"
+          style={{ width, height }}
+        />
         <div
           ref={pathLayerRef}
           className="pdf-path-layer"
+          style={{ width, height }}
+        />
+        <div
+          ref={stampLayerRef}
+          className="pdf-stamp-layer"
           style={{ width, height }}
         />
         <div

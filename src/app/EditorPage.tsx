@@ -4,7 +4,10 @@ import { getOverlays, getPdfById, saveOverlays } from "../storage/pdfStorage";
 import {
   getPageViewport,
   loadPdfPage,
+  renderPage,
+  renderPageForColorSampling,
   renderPathLayerForPage,
+  renderStampLayerForPage,
   renderTextLayerForPage,
 } from "../core/pdf/pdfRenderer";
 import { Canvas } from "../ui/Canvas";
@@ -15,8 +18,10 @@ import { exportHtmlToPdf } from "../core/export/htmlToPdf";
 
 export const EditorPage = () => {
   const { id } = useParams();
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
   const pathLayerRef = useRef<HTMLDivElement | null>(null);
+  const stampLayerRef = useRef<HTMLDivElement | null>(null);
   const [statusKey, setStatusKey] = useState("editor.status.loading");
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
   const [zoomScale, setZoomScale] = useState(1);
@@ -47,7 +52,7 @@ export const EditorPage = () => {
         return;
       }
 
-      if (!textLayerRef.current || !pathLayerRef.current) {
+      if (!canvasRef.current || !textLayerRef.current || !pathLayerRef.current || !stampLayerRef.current) {
         setStatusKey("editor.status.canvasNotReady");
         requestAnimationFrame(() => {
           if (!cancelled) {
@@ -68,8 +73,12 @@ export const EditorPage = () => {
         const scale = 1.1;
         const viewport = getPageViewport(page, scale);
         setPageSize({ width: viewport.width, height: viewport.height, scale });
-        await renderTextLayerForPage(page, textLayerRef.current, scale);
+        const colorSampling = await renderPageForColorSampling(page, scale);
+        await renderPage(page, canvasRef.current, scale);
         await renderPathLayerForPage(page, pathLayerRef.current, scale);
+        await renderStampLayerForPage(page, stampLayerRef.current, scale);
+        await renderTextLayerForPage(page, textLayerRef.current, scale, colorSampling.context);
+        textLayerRef.current.setAttribute("contenteditable", "true");
         const spans = textLayerRef.current.querySelectorAll("span");
         spans.forEach((span, index) => {
           span.dataset.textId = span.dataset.textId ?? `text-${index}`;
@@ -77,7 +86,11 @@ export const EditorPage = () => {
           if (!span.dataset.originalText) {
             span.dataset.originalText = span.textContent ?? "";
           }
-          span.contentEditable = "true";
+
+          const role = span.dataset.textRole === "data" ? "data" : "template";
+          span.dataset.textRole = role;
+          span.contentEditable = role === "data" ? "true" : "false";
+          span.classList.toggle("is-template-text", role === "template");
         });
         const overlayEntry = await getOverlays(documentId);
         if (overlayEntry) {
@@ -205,8 +218,10 @@ export const EditorPage = () => {
         />
         <div className="editor-body">
           <Canvas
+            canvasRef={canvasRef}
             textLayerRef={textLayerRef}
             pathLayerRef={pathLayerRef}
+            stampLayerRef={stampLayerRef}
             status={t(statusKey)}
             width={pageSize.width}
             height={pageSize.height}

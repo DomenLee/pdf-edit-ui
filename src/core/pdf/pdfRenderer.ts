@@ -51,6 +51,96 @@ const cmykToRgb = (c: number, m: number, y: number, k: number): RgbColor => ({
   b: clamp(1 - Math.min(1, y + k)),
 });
 
+
+const INVOICE_LABEL_HINTS = [
+  "发票",
+  "名称",
+  "代码",
+  "号码",
+  "日期",
+  "税",
+  "金额",
+  "价税",
+  "购",
+  "销",
+  "地址",
+  "电话",
+  "开户",
+  "账号",
+  "备注",
+  "规格",
+  "单位",
+  "数量",
+  "单价",
+  "税率",
+  "价款",
+  "合计",
+  "小写",
+  "大写",
+  "机器",
+  "校验",
+  "收款",
+  "复核",
+  "开票",
+  "buyer",
+  "seller",
+  "invoice",
+  "date",
+  "amount",
+  "tax",
+  "total",
+];
+
+const isLikelyDataText = (rawText: string) => {
+  const text = rawText.trim();
+  if (!text) {
+    return false;
+  }
+
+  if (/\d/.test(text)) {
+    return true;
+  }
+
+  if (/[$¥€£]/.test(text)) {
+    return true;
+  }
+
+  if (/^[A-Z0-9\-_/.:]{6,}$/i.test(text)) {
+    return true;
+  }
+
+  if (/[:：]$/.test(text)) {
+    return false;
+  }
+
+  const normalized = text.toLowerCase();
+  if (INVOICE_LABEL_HINTS.some((hint) => normalized.includes(hint))) {
+    return false;
+  }
+
+  if (/^[一-龥]{1,8}$/.test(text)) {
+    return false;
+  }
+
+  return text.length > 8;
+};
+
+const sampleColorAtPoint = (
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+): [number, number, number] | null => {
+  const cx = Math.floor(Math.max(0, Math.min(context.canvas.width - 1, x)));
+  const cy = Math.floor(Math.max(0, Math.min(context.canvas.height - 1, y)));
+
+  try {
+    const { data } = context.getImageData(cx, cy, 1, 1);
+    return [data[0], data[1], data[2]];
+  } catch {
+    return null;
+  }
+};
+
 const normalizeRotation = (rotation: number) => {
   const normalized = ((rotation % 360) + 360) % 360;
   return normalized;
@@ -88,14 +178,64 @@ export const renderPage = async (
 
   canvas.width = viewport.width;
   canvas.height = viewport.height;
-  await page.render({ canvasContext: context, viewport }).promise;
+
+  const originalFillText = context.fillText.bind(context);
+  const originalStrokeText = context.strokeText.bind(context);
+
+  context.fillText = (() => {
+    return;
+  }) as CanvasRenderingContext2D["fillText"];
+  context.strokeText = (() => {
+    return;
+  }) as CanvasRenderingContext2D["strokeText"];
+
+  try {
+    const renderTask = (page as any).render({
+      canvasContext: context,
+      viewport,
+      renderTextLayer: false,
+      renderAnnotationLayer: false,
+      annotationMode: 0,
+    });
+    await renderTask.promise;
+  } finally {
+    context.fillText = originalFillText;
+    context.strokeText = originalStrokeText;
+  }
+
   return { width: viewport.width, height: viewport.height, scale };
+};
+
+
+export const renderPageForColorSampling = async (
+  page: PDFPageProxy,
+  scale = 1.2,
+) => {
+  const viewport = getPageViewport(page, scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error("无法获取采样 Canvas Context");
+  }
+
+  await (page as any).render({
+    canvasContext: context,
+    viewport,
+    renderTextLayer: false,
+    renderAnnotationLayer: false,
+    annotationMode: 0,
+  }).promise;
+
+  return { canvas, context, viewport };
 };
 
 export const renderTextLayerForPage = async (
   page: PDFPageProxy,
   container: HTMLDivElement,
   scale = 1.2,
+  colorSourceContext?: CanvasRenderingContext2D,
 ) => {
   const viewport = getPageViewport(page, scale);
   container.innerHTML = "";
@@ -114,6 +254,132 @@ export const renderTextLayerForPage = async (
   if (task?.promise) {
     await task.promise;
   }
+
+  const COVER_SCALE = 1.01;
+  const containerRect = container.getBoundingClientRect();
+
+  textDivs.forEach((textDiv) => {
+    const currentSize = Number.parseFloat(textDiv.style.fontSize || "0");
+    if (Number.isFinite(currentSize) && currentSize > 0) {
+      textDiv.style.fontSize = `${currentSize * COVER_SCALE}px`;
+    }
+
+    textDiv.style.lineHeight = "1";
+    textDiv.style.whiteSpace = "pre";
+    textDiv.style.background = "none";
+    textDiv.style.textShadow = "0 0 0 #fff, 0 0 1px #fff, 0 0 2px #fff";
+    textDiv.style.outline = "none";
+
+    const textRole = isLikelyDataText(textDiv.textContent ?? "") ? "data" : "template";
+    textDiv.dataset.textRole = textRole;
+
+    if (!colorSourceContext) {
+      return;
+    }
+
+    const rect = textDiv.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return;
+    }
+
+    const sampleX = rect.left - containerRect.left + rect.width / 2;
+    const sampleY = rect.top - containerRect.top + rect.height / 2;
+    const sampled = sampleColorAtPoint(colorSourceContext, sampleX, sampleY) ??
+      sampleColorAtPoint(colorSourceContext, sampleX - 1, sampleY) ??
+      sampleColorAtPoint(colorSourceContext, sampleX + 1, sampleY) ??
+      sampleColorAtPoint(colorSourceContext, sampleX, sampleY - 1) ??
+      sampleColorAtPoint(colorSourceContext, sampleX, sampleY + 1) ??
+      [17, 24, 39];
+
+    textDiv.style.color = `rgb(${sampled[0]}, ${sampled[1]}, ${sampled[2]})`;
+    textDiv.style.caretColor = `rgb(${sampled[0]}, ${sampled[1]}, ${sampled[2]})`;
+  });
+};
+
+const normalizeAnnotationSubtype = (annotation: Record<string, any>) =>
+  String(annotation.subtype ?? annotation.fieldType ?? "").toLowerCase();
+
+const isStampLikeAnnotation = (annotation: Record<string, any>) => {
+  const subtype = normalizeAnnotationSubtype(annotation);
+  const fieldName = String(annotation.fieldName ?? "").toLowerCase();
+  return subtype === "stamp" || subtype === "signature" || fieldName.includes("sign");
+};
+
+const annotationBitmapToDataUrl = (annotation: Record<string, any>) => {
+  const bitmap = annotation.bitmap ?? annotation.imageData;
+  if (!bitmap) {
+    return null;
+  }
+  const width = Number(bitmap.width ?? 0);
+  const height = Number(bitmap.height ?? 0);
+  const raw = bitmap.data;
+  if (!width || !height || !raw) {
+    return null;
+  }
+
+  const imageCanvas = document.createElement("canvas");
+  imageCanvas.width = width;
+  imageCanvas.height = height;
+  const ctx = imageCanvas.getContext("2d");
+  if (!ctx) {
+    return null;
+  }
+
+  const buffer = raw instanceof Uint8ClampedArray ? raw : new Uint8ClampedArray(raw.buffer ?? raw);
+  if (buffer.length < width * height * 4) {
+    return null;
+  }
+
+  ctx.putImageData(new ImageData(buffer, width, height), 0, 0);
+  return imageCanvas.toDataURL("image/png");
+};
+
+export const renderStampLayerForPage = async (
+  page: PDFPageProxy,
+  container: HTMLDivElement,
+  scale = 1.2,
+) => {
+  const viewport = getPageViewport(page, scale);
+  container.innerHTML = "";
+  container.style.width = `${viewport.width}px`;
+  container.style.height = `${viewport.height}px`;
+
+  const viewportAny = viewport as any;
+  const annotations = await (page as any).getAnnotations({ intent: "display" });
+  (annotations as Record<string, any>[])
+    .filter((annotation: Record<string, any>) => isStampLikeAnnotation(annotation))
+    .forEach((annotation: Record<string, any>, index: number) => {
+      const [x1, y1, x2, y2] = annotation.rect ?? [0, 0, 0, 0];
+      const topLeft = viewportAny.convertToViewportPoint(x1, y2);
+      const bottomRight = viewportAny.convertToViewportPoint(x2, y1);
+      const left = Math.min(topLeft[0], bottomRight[0]);
+      const top = Math.min(topLeft[1], bottomRight[1]);
+      const width = Math.abs(bottomRight[0] - topLeft[0]);
+      const height = Math.abs(bottomRight[1] - topLeft[1]);
+
+      const src =
+        annotationBitmapToDataUrl(annotation as Record<string, any>) ??
+        (annotation as Record<string, any>).imageUrl ??
+        (annotation as Record<string, any>).url ??
+        null;
+
+      const stamp = document.createElement("img");
+      stamp.dataset.annotationId = String(annotation.id ?? `stamp-${index}`);
+      stamp.className = "pdf-stamp-item";
+      stamp.draggable = false;
+      stamp.style.position = "absolute";
+      stamp.style.left = `${left}px`;
+      stamp.style.top = `${top}px`;
+      stamp.style.width = `${Math.max(1, width)}px`;
+      stamp.style.height = `${Math.max(1, height)}px`;
+      stamp.style.objectFit = "contain";
+      stamp.alt = "stamp annotation";
+      if (src) {
+        stamp.src = src;
+      }
+
+      container.appendChild(stamp);
+    });
 };
 
 const buildSvgPathElement = (
@@ -203,7 +469,10 @@ export const renderPathLayerForPage = async (
   svg.style.inset = "0";
 
   const viewportMatrix = (viewport as any).transform as Matrix;
-  const opList = await (page as any).getOperatorList();
+  const opList = await (page as any).getOperatorList({
+    intent: "display",
+    annotationMode: 0,
+  });
   const fnArray = opList?.fnArray ?? [];
   const argsArray = opList?.argsArray ?? [];
 

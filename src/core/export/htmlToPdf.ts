@@ -213,7 +213,9 @@ export const exportHtmlToPdf = async ({
     });
   });
 
-  const textNodes = Array.from(textLayer.querySelectorAll("span, div"));
+  const textNodes = Array.from(
+    textLayer.querySelectorAll<HTMLElement>('span[data-text-role="data"], div[data-text-role="data"]'),
+  );
   textNodes.forEach((node) => {
     const text = node.textContent ?? "";
     if (!text.trim()) {
