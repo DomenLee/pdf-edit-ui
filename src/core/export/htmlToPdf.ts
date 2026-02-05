@@ -187,6 +187,86 @@ const convertPathToPdf = (d: string, pageHeight: number, scale: number) => {
   return output.join(" ");
 };
 
+const isWinAnsiEncodeError = (error: unknown) =>
+  error instanceof Error && error.message.includes("WinAnsi cannot encode");
+
+const toCanvasColor = (color: RgbColor | null, fallback: RgbColor) => {
+  const target = color ?? fallback;
+  return `rgb(${Math.round(target.r * 255)}, ${Math.round(target.g * 255)}, ${Math.round(target.b * 255)})`;
+};
+
+const drawTextWithFallback = async ({
+  pdfDoc,
+  page,
+  text,
+  x,
+  y,
+  size,
+  color,
+  font,
+}: {
+  pdfDoc: PDFDocument;
+  page: any;
+  text: string;
+  x: number;
+  y: number;
+  size: number;
+  color: RgbColor | null;
+  font: any;
+}) => {
+  const fallbackColor = { r: 0.07, g: 0.09, b: 0.12 };
+
+  try {
+    page.drawText(text, {
+      x,
+      y,
+      size,
+      color: toPdfColor(color, fallbackColor),
+      font,
+    });
+    return;
+  } catch (error) {
+    if (!isWinAnsiEncodeError(error)) {
+      throw error;
+    }
+  }
+
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Failed to create canvas context for text export fallback.");
+  }
+
+  context.font = `${size}px sans-serif`;
+  const metrics = context.measureText(text);
+  const width = Math.max(1, Math.ceil(metrics.width));
+  const height = Math.max(1, Math.ceil(size * 1.4));
+
+  canvas.width = width;
+  canvas.height = height;
+
+  context.clearRect(0, 0, width, height);
+  context.font = `${size}px sans-serif`;
+  context.fillStyle = toCanvasColor(color, fallbackColor);
+  context.textBaseline = "alphabetic";
+  context.fillText(text, 0, size);
+
+  const imageBytes = await canvasToPngBytes(canvas);
+  const image = await pdfDoc.embedPng(imageBytes);
+  page.drawImage(image, {
+    x,
+    y,
+    width,
+    height,
+  });
+};
+
+const canvasToPngBytes = async (canvas: HTMLCanvasElement) => {
+  const dataUrl = canvas.toDataURL("image/png");
+  const response = await fetch(dataUrl);
+  return new Uint8Array(await response.arrayBuffer());
+};
+
 export const exportHtmlToPdf = async ({
   filename,
   textLayer,
@@ -226,10 +306,10 @@ export const exportHtmlToPdf = async ({
     const svgPaths = Array.from(pathLayer.querySelectorAll("path"));
     const pathScale = viewport * (layerHeight > 0 ? pageRect.height / layerHeight : 1);
 
-    svgPaths.forEach((pathEl) => {
+    for (const pathEl of svgPaths) {
       const originalPath = pathEl.getAttribute("d") ?? "";
       if (!originalPath.trim()) {
-        return;
+        continue;
       }
 
       const pdfPath = convertPathToPdf(originalPath, pageRect.height, pathScale);
@@ -248,17 +328,17 @@ export const exportHtmlToPdf = async ({
         borderColor: stroke ? toPdfColor(stroke, { r: 0, g: 0, b: 0 }) : undefined,
         borderWidth: strokeWidth,
       });
-    });
+    }
 
-    textNodes.forEach((node) => {
+    for (const node of textNodes) {
       const text = node.textContent ?? "";
       if (!text.trim()) {
-        return;
+        continue;
       }
 
       const rect = node.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) {
-        return;
+        continue;
       }
 
       const styles = window.getComputedStyle(node);
@@ -271,64 +351,68 @@ export const exportHtmlToPdf = async ({
         pdfPageHeight -
         (rect.top - pageRect.top + rect.height) * yRatio;
 
-      page.drawText(text, {
+      await drawTextWithFallback({
+        pdfDoc,
+        page,
+        text,
         x,
         y,
         size: fontSize,
-        color: toPdfColor(color, { r: 0.07, g: 0.09, b: 0.12 }),
+        color,
         font: helvetica,
       });
-    });
+    }
   }
 
-  overlays
-    .filter((overlay) => overlay.pageIndex === 0)
-    .forEach((overlay) => {
-      const x = overlay.x * overlayXRatio;
-      const width = overlay.width * overlayXRatio;
-      const height = overlay.height * overlayYRatio;
-      const y = pdfPageHeight - (overlay.y + overlay.height) * overlayYRatio;
+  for (const overlay of overlays.filter((item) => item.pageIndex === 0)) {
+    const x = overlay.x * overlayXRatio;
+    const width = overlay.width * overlayXRatio;
+    const height = overlay.height * overlayYRatio;
+    const y = pdfPageHeight - (overlay.y + overlay.height) * overlayYRatio;
 
-      if (overlay.type === "highlight") {
-        const color = parseColor(overlay.style?.color ?? "#fde047");
-        page.drawRectangle({
-          x,
-          y,
-          width,
-          height,
-          color: toPdfColor(color, { r: 0.99, g: 0.88, b: 0.28 }),
-          opacity: overlay.style?.opacity ?? 0.5,
-        });
-      }
+    if (overlay.type === "highlight") {
+      const color = parseColor(overlay.style?.color ?? "#fde047");
+      page.drawRectangle({
+        x,
+        y,
+        width,
+        height,
+        color: toPdfColor(color, { r: 0.99, g: 0.88, b: 0.28 }),
+        opacity: overlay.style?.opacity ?? 0.5,
+      });
+    }
 
-      if (overlay.type === "text") {
-        const text = overlay.content ?? "";
-        if (!text.trim()) {
-          return;
-        }
-        const color = parseColor(overlay.style?.color ?? "#111827");
-        const size = (overlay.style?.fontSize ?? 16) / viewport;
-        page.drawText(text, {
-          x,
-          y,
-          size,
-          color: toPdfColor(color, { r: 0.07, g: 0.09, b: 0.12 }),
-          font: helvetica,
-        });
+    if (overlay.type === "text") {
+      const text = overlay.content ?? "";
+      if (!text.trim()) {
+        continue;
       }
-    });
+      const color = parseColor(overlay.style?.color ?? "#111827");
+      const size = (overlay.style?.fontSize ?? 16) / viewport;
+      await drawTextWithFallback({
+        pdfDoc,
+        page,
+        text,
+        x,
+        y,
+        size,
+        color,
+        font: helvetica,
+      });
+    }
+  }
 
   if (sourcePdfData) {
-    textNodes.forEach((node) => {
+    for (const node of textNodes) {
       const currentText = node.textContent ?? "";
       const originalText = node.dataset.originalText ?? "";
       if (currentText.trim() === originalText.trim()) {
-        return;
+        continue;
       }
 
       const rect = node.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) {
-        return;
+        continue;
       }
 
       const styles = window.getComputedStyle(node);
@@ -351,14 +435,17 @@ export const exportHtmlToPdf = async ({
         color: rgb(1, 1, 1),
       });
 
-      page.drawText(currentText, {
+      await drawTextWithFallback({
+        pdfDoc,
+        page,
+        text: currentText,
         x,
         y,
         size: fontSize,
-        color: toPdfColor(color, { r: 0.07, g: 0.09, b: 0.12 }),
+        color,
         font: helvetica,
       });
-    });
+    }
   }
 
   const bytes = await pdfDoc.save();

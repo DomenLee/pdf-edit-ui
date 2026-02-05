@@ -129,6 +129,7 @@ declare module "pdf-lib" {
     drawText: (text: string, options: any) => void;
     drawRectangle: (options: any) => void;
     drawSvgPath: (path: string, options: any) => void;
+    drawImage: (image: any, options: any) => void;
   };
 
   export class PDFDocument {
@@ -137,6 +138,7 @@ declare module "pdf-lib" {
     getPage(index: number): PdfPage;
     addPage(size?: [number, number]): PdfPage;
     embedFont(font: string): Promise<any>;
+    embedPng(data: Uint8Array): Promise<any>;
     save(): Promise<Uint8Array>;
   }
 
