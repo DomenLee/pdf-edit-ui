@@ -152,12 +152,18 @@ export const EditorPage = () => {
       return;
     }
 
+    const entry = await getPdfById(documentId);
+    if (!entry) {
+      return;
+    }
+
     await exportHtmlToPdf({
       filename: `${documentId}-edited.pdf`,
       textLayer,
       pathLayer,
       viewportScale: pageSize.scale || 1,
       overlays,
+      sourcePdfData: entry.data,
     });
   };
 
