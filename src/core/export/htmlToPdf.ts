@@ -7,9 +7,18 @@ type HtmlToPdfOptions = {
   pathLayer: HTMLDivElement;
   viewportScale: number;
   overlays?: OverlayObject[];
+  sourcePdfData?: ArrayBuffer;
 };
 
 type RgbColor = { r: number; g: number; b: number };
+
+const EXPORT_FONT_CANDIDATES = [
+  "/fonts/NotoSansSC-Regular.ttf",
+  "/fonts/NotoSansSC-Medium.ttf",
+  "/standard_fonts/NotoSansSC-Regular.ttf",
+  "/standard_fonts/NotoSansSC-Medium.ttf",
+  "/standard_fonts/LiberationSans-Regular.ttf",
+];
 
 const clampColor = (value: number) => Math.min(1, Math.max(0, value));
 
@@ -42,7 +51,9 @@ const parseColor = (raw: string | null | undefined): RgbColor | null => {
     return null;
   }
 
-  const [r = "0", g = "0", b = "0"] = match[1].split(",").map((part) => part.trim());
+  const [r = "0", g = "0", b = "0"] = match[1]
+    .split(",")
+    .map((part) => part.trim());
   const red = Number.parseFloat(r) / 255;
   const green = Number.parseFloat(g) / 255;
   const blue = Number.parseFloat(b) / 255;
@@ -123,22 +134,30 @@ const convertPathToPdf = (d: string, pageHeight: number, scale: number) => {
       }
       case "H": {
         currentX = nextNumber();
-        output.push(`L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`);
+        output.push(
+          `L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`,
+        );
         break;
       }
       case "h": {
         currentX += nextNumber();
-        output.push(`L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`);
+        output.push(
+          `L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`,
+        );
         break;
       }
       case "V": {
         currentY = nextNumber();
-        output.push(`L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`);
+        output.push(
+          `L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`,
+        );
         break;
       }
       case "v": {
         currentY += nextNumber();
-        output.push(`L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`);
+        output.push(
+          `L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`,
+        );
         break;
       }
       case "C": {
@@ -176,110 +195,376 @@ const convertPathToPdf = (d: string, pageHeight: number, scale: number) => {
   return output.join(" ");
 };
 
+const isWinAnsiEncodeError = (error: unknown) =>
+  error instanceof Error && error.message.includes("WinAnsi cannot encode");
+
+const fontByteCache = new Map<string, Uint8Array | null>();
+
+const loadFontBytes = async (url: string) => {
+  if (fontByteCache.has(url)) {
+    return fontByteCache.get(url) ?? null;
+  }
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      fontByteCache.set(url, null);
+      return null;
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    fontByteCache.set(url, bytes);
+    return bytes;
+  } catch {
+    fontByteCache.set(url, null);
+    return null;
+  }
+};
+
+const getCustomFont = async (pdfDoc: PDFDocument) => {
+  const registerFontkit = (pdfDoc as any).registerFontkit as
+    | ((kit: unknown) => void)
+    | undefined;
+  const fontkit = (window as Window & { fontkit?: unknown }).fontkit;
+
+  if (!registerFontkit || !fontkit) {
+    return null;
+  }
+
+  registerFontkit(fontkit);
+
+  for (const path of EXPORT_FONT_CANDIDATES) {
+    const fontBytes = await loadFontBytes(path);
+    if (!fontBytes) {
+      continue;
+    }
+
+    try {
+      return await pdfDoc.embedFont(fontBytes, { subset: true });
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+};
+
+const canEncodeWithFont = (font: any, text: string) => {
+  if (!font) {
+    return false;
+  }
+
+  try {
+    font.encodeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const toCanvasColor = (color: RgbColor | null, fallback: RgbColor) => {
+  const target = color ?? fallback;
+  return `rgb(${Math.round(target.r * 255)}, ${Math.round(target.g * 255)}, ${Math.round(target.b * 255)})`;
+};
+
+const drawTextAsPng = async ({
+  pdfDoc,
+  page,
+  text,
+  x,
+  y,
+  size,
+  color,
+}: {
+  pdfDoc: PDFDocument;
+  page: any;
+  text: string;
+  x: number;
+  y: number;
+  size: number;
+  color: RgbColor | null;
+}) => {
+  const fallbackColor = { r: 0.07, g: 0.09, b: 0.12 };
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Failed to create canvas context for text export fallback.");
+  }
+
+  context.font = `${size}px sans-serif`;
+  const metrics = context.measureText(text);
+  const width = Math.max(1, Math.ceil(metrics.width));
+  const height = Math.max(1, Math.ceil(size * 1.4));
+
+  canvas.width = width;
+  canvas.height = height;
+
+  context.clearRect(0, 0, width, height);
+  context.font = `${size}px sans-serif`;
+  context.fillStyle = toCanvasColor(color, fallbackColor);
+  context.textBaseline = "alphabetic";
+  context.fillText(text, 0, size);
+
+  const dataUrl = canvas.toDataURL("image/png");
+  const response = await fetch(dataUrl);
+  const imageBytes = new Uint8Array(await response.arrayBuffer());
+  const image = await pdfDoc.embedPng(imageBytes);
+  page.drawImage(image, {
+    x,
+    y,
+    width,
+    height,
+  });
+};
+
+const drawTextWithFallback = async ({
+  pdfDoc,
+  page,
+  text,
+  x,
+  y,
+  size,
+  color,
+  primaryFont,
+  customFont,
+}: {
+  pdfDoc: PDFDocument;
+  page: any;
+  text: string;
+  x: number;
+  y: number;
+  size: number;
+  color: RgbColor | null;
+  primaryFont: any;
+  customFont: any;
+}) => {
+  const fallbackColor = { r: 0.07, g: 0.09, b: 0.12 };
+
+  const preferredFonts = [customFont, primaryFont].filter(Boolean);
+  for (const font of preferredFonts) {
+    if (!canEncodeWithFont(font, text)) {
+      continue;
+    }
+
+    page.drawText(text, {
+      x,
+      y,
+      size,
+      color: toPdfColor(color, fallbackColor),
+      font,
+    });
+    return;
+  }
+
+  try {
+    page.drawText(text, {
+      x,
+      y,
+      size,
+      color: toPdfColor(color, fallbackColor),
+      font: primaryFont,
+    });
+    return;
+  } catch (error) {
+    if (!isWinAnsiEncodeError(error)) {
+      throw error;
+    }
+  }
+
+  await drawTextAsPng({
+    pdfDoc,
+    page,
+    text,
+    x,
+    y,
+    size,
+    color,
+  });
+};
+
 export const exportHtmlToPdf = async ({
   filename,
   textLayer,
   pathLayer,
   viewportScale,
   overlays = [],
+  sourcePdfData,
 }: HtmlToPdfOptions) => {
-  const scale = viewportScale || 1;
+  const viewport = viewportScale || 1;
   const pageRect = textLayer.getBoundingClientRect();
-  const pageWidth = pageRect.width / scale;
-  const pageHeight = pageRect.height / scale;
+  const fallbackWidth = pageRect.width / viewport;
+  const fallbackHeight = pageRect.height / viewport;
+  const layerWidth = textLayer.clientWidth || pageRect.width;
+  const layerHeight = textLayer.clientHeight || pageRect.height;
 
-  const pdfDoc = await PDFDocument.create();
-  const page = pdfDoc.addPage([pageWidth, pageHeight]);
+  const pdfDoc = sourcePdfData
+    ? await PDFDocument.load(sourcePdfData)
+    : await PDFDocument.create();
+  const page = sourcePdfData
+    ? pdfDoc.getPage(0)
+    : pdfDoc.addPage([fallbackWidth, fallbackHeight]);
+
+  const { width: pdfPageWidth, height: pdfPageHeight } = page.getSize();
+  const xRatio = pdfPageWidth / pageRect.width;
+  const yRatio = pdfPageHeight / pageRect.height;
+  const overlayXRatio = pdfPageWidth / (layerWidth || 1);
+  const overlayYRatio = pdfPageHeight / (layerHeight || 1);
   const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
-
-  const svgPaths = Array.from(pathLayer.querySelectorAll("path"));
-  svgPaths.forEach((pathEl) => {
-    const originalPath = pathEl.getAttribute("d") ?? "";
-    if (!originalPath.trim()) {
-      return;
-    }
-
-    const pdfPath = convertPathToPdf(originalPath, pageRect.height, scale);
-    const strokeWidthValue = Number.parseFloat(pathEl.getAttribute("stroke-width") ?? "1");
-    const strokeWidth = Number.isFinite(strokeWidthValue) ? strokeWidthValue / scale : 1;
-
-    const fill = parseColor(pathEl.getAttribute("fill"));
-    const stroke = parseColor(pathEl.getAttribute("stroke"));
-
-    page.drawSvgPath(pdfPath, {
-      color: fill ? toPdfColor(fill, { r: 0, g: 0, b: 0 }) : undefined,
-      borderColor: stroke ? toPdfColor(stroke, { r: 0, g: 0, b: 0 }) : undefined,
-      borderWidth: strokeWidth,
-    });
-  });
+  const customFont = await getCustomFont(pdfDoc);
 
   const textNodes = Array.from(
-    textLayer.querySelectorAll<HTMLElement>('span[data-text-role="data"], div[data-text-role="data"]'),
+    textLayer.querySelectorAll<HTMLElement>(
+      'span[data-text-role="data"], div[data-text-role="data"]',
+    ),
   );
-  textNodes.forEach((node) => {
-    const text = node.textContent ?? "";
-    if (!text.trim()) {
-      return;
-    }
 
-    const rect = node.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) {
-      return;
-    }
+  if (!sourcePdfData) {
+    const svgPaths = Array.from(pathLayer.querySelectorAll("path"));
+    const pathScale = viewport * (layerHeight > 0 ? pageRect.height / layerHeight : 1);
 
-    const styles = window.getComputedStyle(node);
-    const fontSizePx = Number.parseFloat(styles.fontSize || "12");
-    const fontSize = Number.isFinite(fontSizePx) ? fontSizePx / scale : 12;
-    const color = parseColor(styles.color);
-
-    const x = (rect.left - pageRect.left) / scale;
-    const y = pageHeight - (rect.top - pageRect.top + rect.height) / scale;
-
-    page.drawText(text, {
-      x,
-      y,
-      size: fontSize,
-      color: toPdfColor(color, { r: 0.07, g: 0.09, b: 0.12 }),
-      font: helvetica,
-    });
-  });
-
-  overlays
-    .filter((overlay) => overlay.pageIndex === 0)
-    .forEach((overlay) => {
-      const x = overlay.x / scale;
-      const width = overlay.width / scale;
-      const height = overlay.height / scale;
-      const y = pageHeight - (overlay.y + overlay.height) / scale;
-
-      if (overlay.type === "highlight") {
-        const color = parseColor(overlay.style?.color ?? "#fde047");
-        page.drawRectangle({
-          x,
-          y,
-          width,
-          height,
-          color: toPdfColor(color, { r: 0.99, g: 0.88, b: 0.28 }),
-          opacity: overlay.style?.opacity ?? 0.5,
-        });
+    for (const pathEl of svgPaths) {
+      const originalPath = pathEl.getAttribute("d") ?? "";
+      if (!originalPath.trim()) {
+        continue;
       }
 
-      if (overlay.type === "text") {
-        const text = overlay.content ?? "";
-        if (!text.trim()) {
-          return;
-        }
-        const color = parseColor(overlay.style?.color ?? "#111827");
-        const size = (overlay.style?.fontSize ?? 16) / scale;
-        page.drawText(text, {
-          x,
-          y,
-          size,
-          color: toPdfColor(color, { r: 0.07, g: 0.09, b: 0.12 }),
-          font: helvetica,
-        });
+      const pdfPath = convertPathToPdf(originalPath, pageRect.height, pathScale);
+      const strokeWidthValue = Number.parseFloat(
+        pathEl.getAttribute("stroke-width") ?? "1",
+      );
+      const strokeWidth = Number.isFinite(strokeWidthValue)
+        ? strokeWidthValue / pathScale
+        : 1;
+
+      const fill = parseColor(pathEl.getAttribute("fill"));
+      const stroke = parseColor(pathEl.getAttribute("stroke"));
+
+      page.drawSvgPath(pdfPath, {
+        color: fill ? toPdfColor(fill, { r: 0, g: 0, b: 0 }) : undefined,
+        borderColor: stroke ? toPdfColor(stroke, { r: 0, g: 0, b: 0 }) : undefined,
+        borderWidth: strokeWidth,
+      });
+    }
+
+    for (const node of textNodes) {
+      const text = node.textContent ?? "";
+      if (!text.trim()) {
+        continue;
       }
-    });
+
+      const rect = node.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        continue;
+      }
+
+      const styles = window.getComputedStyle(node);
+      const fontSizePx = Number.parseFloat(styles.fontSize || "12");
+      const fontSize = Number.isFinite(fontSizePx) ? fontSizePx / viewport : 12;
+      const color = parseColor(styles.color);
+
+      const x = (rect.left - pageRect.left) * xRatio;
+      const y =
+        pdfPageHeight -
+        (rect.top - pageRect.top + rect.height) * yRatio;
+
+      await drawTextWithFallback({
+        pdfDoc,
+        page,
+        text,
+        x,
+        y,
+        size: fontSize,
+        color,
+        primaryFont: helvetica,
+        customFont,
+      });
+    }
+  }
+
+  for (const overlay of overlays.filter((item) => item.pageIndex === 0)) {
+    const x = overlay.x * overlayXRatio;
+    const width = overlay.width * overlayXRatio;
+    const height = overlay.height * overlayYRatio;
+    const y = pdfPageHeight - (overlay.y + overlay.height) * overlayYRatio;
+
+    if (overlay.type === "highlight") {
+      const color = parseColor(overlay.style?.color ?? "#fde047");
+      page.drawRectangle({
+        x,
+        y,
+        width,
+        height,
+        color: toPdfColor(color, { r: 0.99, g: 0.88, b: 0.28 }),
+        opacity: overlay.style?.opacity ?? 0.5,
+      });
+    }
+
+    if (overlay.type === "text") {
+      const text = overlay.content ?? "";
+      if (!text.trim()) {
+        continue;
+      }
+      const color = parseColor(overlay.style?.color ?? "#111827");
+      const size = (overlay.style?.fontSize ?? 16) / viewport;
+      await drawTextWithFallback({
+        pdfDoc,
+        page,
+        text,
+        x,
+        y,
+        size,
+        color,
+        primaryFont: helvetica,
+        customFont,
+      });
+    }
+  }
+
+  if (sourcePdfData) {
+    for (const node of textNodes) {
+      const currentText = node.textContent ?? "";
+      const originalText = node.dataset.originalText ?? "";
+      if (currentText.trim() === originalText.trim()) {
+        continue;
+      }
+
+      const rect = node.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        continue;
+      }
+
+      const styles = window.getComputedStyle(node);
+      const fontSizePx = Number.parseFloat(styles.fontSize || "12");
+      const fontSize = Number.isFinite(fontSizePx) ? fontSizePx / viewport : 12;
+      const color = parseColor(styles.color);
+
+      const x = (rect.left - pageRect.left) * xRatio;
+      const y =
+        pdfPageHeight -
+        (rect.top - pageRect.top + rect.height) * yRatio;
+      const width = rect.width * xRatio;
+      const height = rect.height * yRatio;
+
+      page.drawRectangle({
+        x,
+        y,
+        width,
+        height,
+        color: rgb(1, 1, 1),
+      });
+
+      await drawTextWithFallback({
+        pdfDoc,
+        page,
+        text: currentText,
+        x,
+        y,
+        size: fontSize,
+        color,
+        primaryFont: helvetica,
+        customFont,
+      });
+    }
+  }
 
   const bytes = await pdfDoc.save();
   triggerDownload(bytes, filename);
