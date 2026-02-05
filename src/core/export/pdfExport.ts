@@ -69,12 +69,9 @@ export const exportPdf = async ({
         return;
       }
       page.drawText(text, {
-        x: item.originalBBox.x * scaleX,
-        y:
-          pdfHeight -
-          (item.originalBBox.y + item.originalBBox.height) *
-            scaleY,
-        size: item.fontSize * scaleY,
+        x: item.bbox.x,
+        y: item.bbox.y,
+        size: item.fontSize ?? 12,
         color: parseHexColor("#111827"),
       });
     });

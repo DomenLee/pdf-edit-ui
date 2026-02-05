@@ -23,6 +23,6 @@ export type EditedTextItem = {
   pageIndex: number;
   originalText: string;
   replacementText: string;
-  originalBBox: { x: number; y: number; width: number; height: number };
-  fontSize: number;
+  bbox: { x: number; y: number; width: number; height: number };
+  fontSize?: number;
 };

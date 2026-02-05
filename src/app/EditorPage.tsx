@@ -5,6 +5,7 @@ import {
   loadPdfPage,
   renderPage,
   renderTextLayerForPage,
+  renderPathLayerForPage,
 } from "../core/pdf/pdfRenderer";
 import { Sidebar } from "../ui/Sidebar";
 import { PropertyPanel } from "../ui/PropertyPanel";
@@ -20,8 +21,11 @@ export const EditorPage = () => {
   const { id } = useParams();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
+  const pathLayerRef = useRef<HTMLDivElement | null>(null);
   const [statusKey, setStatusKey] = useState("editor.status.loading");
+  const [editingMode, setEditingMode] = useState(false);
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
+  const [pdfPageSize, setPdfPageSize] = useState({ width: 0, height: 0 });
   const documentId = useMemo(() => id ?? "", [id]);
   const overlays = useOverlayStore((state) => state.overlays);
   const initializeOverlays = useOverlayStore(
@@ -61,7 +65,7 @@ export const EditorPage = () => {
         return;
       }
 
-      if (!canvasRef.current || !textLayerRef.current) {
+      if (!canvasRef.current) {
         setStatusKey("editor.status.canvasNotReady");
         return;
       }
@@ -71,14 +75,10 @@ export const EditorPage = () => {
         const scale = 1.1;
         const renderResult = await renderPage(page, canvasRef.current, scale);
         setPageSize(renderResult);
-        await renderTextLayerForPage(page, textLayerRef.current, scale);
-        const spans = textLayerRef.current.querySelectorAll("span");
-        spans.forEach((span, index) => {
-          span.dataset.textId = span.dataset.textId ?? `text-${index}`;
-          span.dataset.pageIndex = "0";
-          if (!span.dataset.originalText) {
-            span.dataset.originalText = span.textContent ?? "";
-          }
+        const baseViewport = page.getViewport({ scale: 1 });
+        setPdfPageSize({
+          width: baseViewport.width,
+          height: baseViewport.height,
         });
         const overlayEntry = await getOverlays(documentId);
         if (overlayEntry) {
@@ -108,7 +108,20 @@ export const EditorPage = () => {
           const legacy = (overlayEntry as {
             nativeTextReplacements?: EditedTextItem[];
           }).nativeTextReplacements;
-          setEditedTextItems(overlayEntry.editedTextItems ?? legacy ?? []);
+          const nextItems = (overlayEntry.editedTextItems ?? legacy ?? []).map(
+            (item) => ({
+              ...item,
+              bbox:
+                (item as { bbox?: EditedTextItem["bbox"] }).bbox ??
+                (item as { originalBBox?: EditedTextItem["bbox"] }).originalBBox ?? {
+                  x: 0,
+                  y: 0,
+                  width: 0,
+                  height: 0,
+                },
+            }),
+          );
+          setEditedTextItems(nextItems);
         } else {
           initializeOverlays([]);
           setEditedTextItems([]);
@@ -122,6 +135,49 @@ export const EditorPage = () => {
 
     void load();
   }, [documentId, initializeOverlays, setEditedTextItems]);
+
+  useEffect(() => {
+    const renderEditLayers = async () => {
+      if (
+        !editingMode ||
+        !textLayerRef.current ||
+        !pathLayerRef.current ||
+        !documentId
+      ) {
+        return;
+      }
+      const entry = await getPdfById(documentId);
+      if (!entry) {
+        return;
+      }
+      const page = await loadPdfPage(entry.data, 1);
+      const scale = pageSize.scale || 1.1;
+      await renderTextLayerForPage(page, textLayerRef.current, scale);
+      await renderPathLayerForPage(page, pathLayerRef.current, scale);
+      const spans = textLayerRef.current.querySelectorAll("span");
+      spans.forEach((span, index) => {
+        span.dataset.textId = span.dataset.textId ?? `text-${index}`;
+        span.dataset.pageIndex = "0";
+        if (!span.dataset.originalText) {
+          span.dataset.originalText = span.textContent ?? "";
+        }
+        span.contentEditable = "false";
+      });
+    };
+
+    if (editingMode) {
+      void renderEditLayers();
+      return;
+    }
+
+    if (textLayerRef.current) {
+      textLayerRef.current.innerHTML = "";
+    }
+    if (pathLayerRef.current) {
+      pathLayerRef.current.innerHTML = "";
+    }
+    setActiveEditingTextId(null);
+  }, [documentId, editingMode, pageSize.scale, setActiveEditingTextId]);
 
   useEffect(() => {
     if (!documentId) {
@@ -169,6 +225,7 @@ export const EditorPage = () => {
       width: rect.width,
       height: rect.height,
     };
+    const scale = pageSize.scale || 1;
     const fontSize = Number.parseFloat(
       window.getComputedStyle(span).fontSize || "12",
     );
@@ -177,8 +234,15 @@ export const EditorPage = () => {
       pageIndex: 0,
       originalText,
       replacementText,
-      originalBBox: bbox,
-      fontSize,
+      bbox: {
+        x: bbox.x / scale,
+        y: pdfPageSize.height
+          ? pdfPageSize.height - (bbox.y + bbox.height) / scale
+          : bbox.y / scale,
+        width: bbox.width / scale,
+        height: bbox.height / scale,
+      },
+      fontSize: fontSize / scale,
     };
     upsertEditedTextItem(item);
     span.contentEditable = "false";
@@ -210,7 +274,7 @@ export const EditorPage = () => {
 
   useEffect(() => {
     const container = textLayerRef.current;
-    if (!container) {
+    if (!container || !editingMode) {
       return;
     }
 
@@ -230,11 +294,11 @@ export const EditorPage = () => {
         span.textContent = span.dataset.originalText;
       }
     });
-  }, [editedTextItems]);
+  }, [editedTextItems, editingMode]);
 
   useEffect(() => {
     const container = textLayerRef.current;
-    if (!container) {
+    if (!container || !editingMode) {
       return;
     }
 
@@ -259,7 +323,7 @@ export const EditorPage = () => {
 
     container.addEventListener("mousedown", handlePointerDown);
     return () => container.removeEventListener("mousedown", handlePointerDown);
-  }, [setActiveEditingTextId]);
+  }, [editingMode, setActiveEditingTextId]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -296,12 +360,18 @@ export const EditorPage = () => {
   return (
     <div className="editor-shell">
       <div className="editor-layout">
-        <Toolbar onExport={handleExport} />
+        <Toolbar
+          onExport={handleExport}
+          editingMode={editingMode}
+          onToggleEditingMode={() => setEditingMode((prev) => !prev)}
+        />
         <div className="editor-body">
           <Sidebar />
           <Canvas
             canvasRef={canvasRef}
             textLayerRef={textLayerRef}
+            pathLayerRef={pathLayerRef}
+            editingMode={editingMode}
             status={t(statusKey)}
             width={pageSize.width}
             height={pageSize.height}

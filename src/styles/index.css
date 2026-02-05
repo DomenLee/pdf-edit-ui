@@ -47,8 +47,8 @@ body {
 
 .pdf-text-layer {
   @apply absolute left-0 top-0 z-20;
-  color: transparent;
-  pointer-events: none;
+  color: #111827;
+  pointer-events: auto;
   user-select: none;
 }
 
@@ -56,14 +56,18 @@ body {
   position: absolute;
   white-space: pre;
   transform-origin: 0 0;
-  color: transparent;
+  color: #111827;
   caret-color: #111827;
   pointer-events: auto;
 }
 
 .pdf-text-layer span.is-editing {
-  color: #111827;
   user-select: text;
+}
+
+.pdf-path-layer {
+  @apply absolute left-0 top-0 z-10;
+  pointer-events: none;
 }
 
 .canvas-layer [contenteditable][data-placeholder]:empty:before {

@@ -146,6 +146,7 @@ declare module "pdfjs-dist" {
     width: number;
     height: number;
     scale: number;
+    convertToViewportPoint?: (x: number, y: number) => number[];
     convertToViewportRectangle?: (rect: number[]) => number[];
   };
 
@@ -160,6 +161,7 @@ declare module "pdfjs-dist" {
       viewport: PDFViewport;
     }) => { promise: Promise<void> };
     getTextContent?: () => Promise<{ items: unknown[] }>;
+    getOperatorList?: () => Promise<{ fnArray: number[]; argsArray: unknown[] }>;
   };
 
   export const GlobalWorkerOptions: { workerSrc: string };
@@ -171,6 +173,27 @@ declare module "pdfjs-dist" {
     textDivs?: HTMLElement[];
     enhanceTextSelection?: boolean;
   }): { promise?: Promise<void> };
+
+  export const OPS: {
+    moveTo: number;
+    lineTo: number;
+    curveTo: number;
+    curveTo2: number;
+    curveTo3: number;
+    closePath: number;
+    rectangle: number;
+    stroke: number;
+    closeStroke: number;
+    fill: number;
+    eoFill: number;
+    fillStroke: number;
+    eoFillStroke: number;
+    closeFillStroke: number;
+    closeEOFillStroke: number;
+    setStrokeRGBColor: number;
+    setFillRGBColor: number;
+    setLineWidth: number;
+  };
 
   export function getDocument(options: {
     data: ArrayBuffer;

@@ -23,9 +23,15 @@ import { OverlayTool } from "../overlay/tools/toolTypes";
 
 type ToolbarProps = {
   onExport: () => void;
+  editingMode: boolean;
+  onToggleEditingMode: () => void;
 };
 
-export const Toolbar = ({ onExport }: ToolbarProps) => {
+export const Toolbar = ({
+  onExport,
+  editingMode,
+  onToggleEditingMode,
+}: ToolbarProps) => {
   const activeTool = useToolStore((state) => state.activeTool);
   const setTool = useToolStore((state) => state.setTool);
   const undo = useOverlayStore((state) => state.undo);
@@ -69,6 +75,9 @@ export const Toolbar = ({ onExport }: ToolbarProps) => {
         </Toggle>
       </div>
       <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={onToggleEditingMode}>
+          {editingMode ? t("toolbar.doneEditing") : t("toolbar.editMode")}
+        </Button>
         <Button
           variant="secondary"
           size="sm"
