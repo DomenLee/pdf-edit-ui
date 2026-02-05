@@ -51,6 +51,10 @@ const cmykToRgb = (c: number, m: number, y: number, k: number): RgbColor => ({
   b: clamp(1 - Math.min(1, y + k)),
 });
 
+const TEMPLATE_RED = "#b00000";
+const DATA_BLACK = "#000000";
+const SECONDARY_GRAY = "#666666";
+
 
 const INVOICE_LABEL_HINTS = [
   "发票",
@@ -144,6 +148,18 @@ const sampleColorAtPoint = (
 const normalizeRotation = (rotation: number) => {
   const normalized = ((rotation % 360) + 360) % 360;
   return normalized;
+};
+
+const detectInvoicePDF = (textContent: any) => {
+  const normalizedText = String(
+    textContent?.items?.map((item: any) => item?.str ?? "").join(" ") ?? "",
+  ).toLowerCase();
+  return normalizedText.includes("发票") && (
+    normalizedText.includes("代码") ||
+    normalizedText.includes("号码") ||
+    normalizedText.includes("tax") ||
+    normalizedText.includes("invoice")
+  );
 };
 
 export const loadPdfPage = async (data: ArrayBuffer, pageNumber = 1) => {
@@ -255,8 +271,62 @@ export const renderTextLayerForPage = async (
     await task.promise;
   }
 
+  const isInvoicePDF = detectInvoicePDF(textContent);
+  const previousInvoiceEditCleanup = (container as any).__invoiceEditCleanup;
+  if (typeof previousInvoiceEditCleanup === "function") {
+    previousInvoiceEditCleanup();
+  }
+  delete (container as any).__invoiceEditCleanup;
+
   const COVER_SCALE = 1.01;
   const containerRect = container.getBoundingClientRect();
+
+  if (isInvoicePDF) {
+    const clearEditingOutline = () => {
+      textDivs.forEach((div) => {
+        div.style.outline = "none";
+        div.style.outlineOffset = "0px";
+      });
+    };
+
+    const updateEditingOutline = () => {
+      clearEditingOutline();
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) {
+        return;
+      }
+
+      const anchorElement = selection.anchorNode instanceof Element
+        ? selection.anchorNode
+        : selection.anchorNode?.parentElement;
+      const activeSpan = anchorElement?.closest("span");
+      if (!(activeSpan instanceof HTMLElement) || !container.contains(activeSpan)) {
+        return;
+      }
+
+      if (document.activeElement !== container && !container.contains(document.activeElement)) {
+        return;
+      }
+
+      activeSpan.style.outline = "1px solid #1677ff";
+      activeSpan.style.outlineOffset = "1px";
+    };
+
+    document.addEventListener("selectionchange", updateEditingOutline);
+    container.addEventListener("focusin", updateEditingOutline);
+    container.addEventListener("focusout", clearEditingOutline);
+    container.addEventListener("keyup", updateEditingOutline);
+    container.addEventListener("mouseup", updateEditingOutline);
+
+    (container as any).__invoiceEditCleanup = () => {
+      document.removeEventListener("selectionchange", updateEditingOutline);
+      container.removeEventListener("focusin", updateEditingOutline);
+      container.removeEventListener("focusout", clearEditingOutline);
+      container.removeEventListener("keyup", updateEditingOutline);
+      container.removeEventListener("mouseup", updateEditingOutline);
+      clearEditingOutline();
+    };
+  }
 
   textDivs.forEach((textDiv) => {
     const currentSize = Number.parseFloat(textDiv.style.fontSize || "0");
@@ -272,6 +342,18 @@ export const renderTextLayerForPage = async (
 
     const textRole = isLikelyDataText(textDiv.textContent ?? "") ? "data" : "template";
     textDiv.dataset.textRole = textRole;
+
+    if (isInvoicePDF) {
+      const templateColor = textRole === "template"
+        ? TEMPLATE_RED
+        : textRole === "data"
+          ? DATA_BLACK
+          : SECONDARY_GRAY;
+      textDiv.style.color = templateColor;
+      textDiv.style.caretColor = templateColor;
+      textDiv.style.fontFamily = '"宋体", SimSun, serif';
+      return;
+    }
 
     if (!colorSourceContext) {
       return;
