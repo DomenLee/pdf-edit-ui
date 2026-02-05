@@ -51,21 +51,30 @@ export const EditorPage = () => {
   );
 
   useEffect(() => {
+    let cancelled = false;
     const load = async () => {
+      if (cancelled) {
+        return;
+      }
       setStatusKey("editor.status.loading");
       if (!documentId) {
         setStatusKey("editor.status.missingId");
         return;
       }
 
-      const entry = await getPdfById(documentId);
-      if (!entry) {
-        setStatusKey("editor.status.missingPdf");
+      if (!canvasRef.current || !textLayerRef.current || !pathLayerRef.current) {
+        setStatusKey("editor.status.canvasNotReady");
+        requestAnimationFrame(() => {
+          if (!cancelled) {
+            void load();
+          }
+        });
         return;
       }
 
-      if (!canvasRef.current || !textLayerRef.current || !pathLayerRef.current) {
-        setStatusKey("editor.status.canvasNotReady");
+      const entry = await getPdfById(documentId);
+      if (!entry) {
+        setStatusKey("editor.status.missingPdf");
         return;
       }
 
@@ -144,6 +153,9 @@ export const EditorPage = () => {
     };
 
     void load();
+    return () => {
+      cancelled = true;
+    };
   }, [documentId, initializeOverlays, setEditedTextItems]);
 
 
