@@ -58,6 +58,7 @@ body {
   color: #111827;
   caret-color: #111827;
   pointer-events: auto;
+  outline: none;
 }
 
 .pdf-text-layer span.is-editing {

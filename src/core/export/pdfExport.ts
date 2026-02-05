@@ -5,10 +5,12 @@ type ExportOptions = {
   data: ArrayBuffer;
   overlays: OverlayObject[];
   editedTextItems?: EditedTextItem[];
-  pageSize: {
-    width: number;
-    height: number;
-  };
+  svgPaths?: Array<{
+    d: string;
+    fill: string;
+    stroke: string;
+    strokeWidth: string;
+  }>;
   filename: string;
 };
 
@@ -24,14 +26,12 @@ export const exportPdf = async ({
   data,
   overlays,
   editedTextItems = [],
-  pageSize,
+  svgPaths = [],
   filename,
 }: ExportOptions) => {
   const pdfDoc = await PDFDocument.load(data);
   const page = pdfDoc.getPage(0);
-  const { width: pdfWidth, height: pdfHeight } = page.getSize();
-  const scaleX = pageSize.width ? pdfWidth / pageSize.width : 1;
-  const scaleY = pageSize.height ? pdfHeight / pageSize.height : 1;
+  const { height: pdfHeight } = page.getSize();
 
   overlays
     .filter((overlay) => overlay.pageIndex === 0)
@@ -40,9 +40,9 @@ export const exportPdf = async ({
         const fontSize = overlay.style?.fontSize ?? 16;
         const color = overlay.style?.color ?? "#111827";
         page.drawText(overlay.content ?? "", {
-          x: overlay.x * scaleX,
-          y: pdfHeight - (overlay.y + overlay.height) * scaleY,
-          size: fontSize * scaleY,
+          x: overlay.x,
+          y: pdfHeight - (overlay.y + overlay.height),
+          size: fontSize,
           color: parseHexColor(color),
         });
       }
@@ -51,10 +51,10 @@ export const exportPdf = async ({
         const color = overlay.style?.color ?? "#fde047";
         const opacity = overlay.style?.opacity ?? 0.5;
         page.drawRectangle({
-          x: overlay.x * scaleX,
-          y: pdfHeight - (overlay.y + overlay.height) * scaleY,
-          width: overlay.width * scaleX,
-          height: overlay.height * scaleY,
+          x: overlay.x,
+          y: pdfHeight - (overlay.y + overlay.height),
+          width: overlay.width,
+          height: overlay.height,
           color: parseHexColor(color),
           opacity,
         });
@@ -75,6 +75,38 @@ export const exportPdf = async ({
         color: parseHexColor("#111827"),
       });
     });
+
+  const parseSvgColor = (value: string) => {
+    if (!value || value === "none") {
+      return null;
+    }
+    if (value.startsWith("#")) {
+      return parseHexColor(value);
+    }
+    const rgbMatch = value.match(/rgba?\\(([^)]+)\\)/);
+    if (rgbMatch) {
+      const parts = rgbMatch[1].split(",").map((part) => Number.parseFloat(part.trim()));
+      const [r, g, b] = parts;
+      if ([r, g, b].every((v) => Number.isFinite(v))) {
+        return { r: r / 255, g: g / 255, b: b / 255 };
+      }
+    }
+    return parseHexColor("#111827");
+  };
+
+  svgPaths.forEach((path) => {
+    if (!path.d) {
+      return;
+    }
+    const fill = parseSvgColor(path.fill);
+    const stroke = parseSvgColor(path.stroke);
+    const strokeWidth = Number.parseFloat(path.strokeWidth || "1");
+    page.drawSvgPath(path.d, {
+      color: fill ?? undefined,
+      borderColor: stroke ?? undefined,
+      borderWidth: Number.isFinite(strokeWidth) ? strokeWidth : undefined,
+    });
+  });
 
   const bytes = await pdfDoc.save();
   const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });

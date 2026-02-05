@@ -130,6 +130,7 @@ declare module "pdf-lib" {
       getSize(): { width: number; height: number };
       drawText: (text: string, options: any) => void;
       drawRectangle: (options: any) => void;
+      drawSvgPath: (path: string, options: any) => void;
     };
     save(): Promise<Uint8Array>;
   }

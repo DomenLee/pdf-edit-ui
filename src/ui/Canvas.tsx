@@ -1,9 +1,7 @@
 import { RefObject, useEffect, useState } from "react";
-import { OverlayLayer } from "../overlay/OverlayLayer";
 import { cn } from "../components/ui/utils";
 
 type CanvasProps = {
-  canvasRef: RefObject<HTMLCanvasElement>;
   textLayerRef: RefObject<HTMLDivElement>;
   pathLayerRef: RefObject<HTMLDivElement>;
   status: string;
@@ -13,7 +11,6 @@ type CanvasProps = {
 };
 
 export const Canvas = ({
-  canvasRef,
   textLayerRef,
   pathLayerRef,
   status,
@@ -51,7 +48,6 @@ export const Canvas = ({
           className="pdf-text-layer"
           style={{ width, height }}
         />
-        {width > 0 && height > 0 && <OverlayLayer width={width} height={height} />}
       </div>
     </section>
   );
