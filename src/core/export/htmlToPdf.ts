@@ -12,6 +12,14 @@ type HtmlToPdfOptions = {
 
 type RgbColor = { r: number; g: number; b: number };
 
+const EXPORT_FONT_CANDIDATES = [
+  "/fonts/NotoSansSC-Regular.ttf",
+  "/fonts/NotoSansSC-Medium.ttf",
+  "/standard_fonts/NotoSansSC-Regular.ttf",
+  "/standard_fonts/NotoSansSC-Medium.ttf",
+  "/standard_fonts/LiberationSans-Regular.ttf",
+];
+
 const clampColor = (value: number) => Math.min(1, Math.max(0, value));
 
 const parseColor = (raw: string | null | undefined): RgbColor | null => {
@@ -190,12 +198,75 @@ const convertPathToPdf = (d: string, pageHeight: number, scale: number) => {
 const isWinAnsiEncodeError = (error: unknown) =>
   error instanceof Error && error.message.includes("WinAnsi cannot encode");
 
+const fontByteCache = new Map<string, Uint8Array | null>();
+
+const loadFontBytes = async (url: string) => {
+  if (fontByteCache.has(url)) {
+    return fontByteCache.get(url) ?? null;
+  }
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      fontByteCache.set(url, null);
+      return null;
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    fontByteCache.set(url, bytes);
+    return bytes;
+  } catch {
+    fontByteCache.set(url, null);
+    return null;
+  }
+};
+
+const getCustomFont = async (pdfDoc: PDFDocument) => {
+  const registerFontkit = (pdfDoc as any).registerFontkit as
+    | ((kit: unknown) => void)
+    | undefined;
+  const fontkit = (window as Window & { fontkit?: unknown }).fontkit;
+
+  if (!registerFontkit || !fontkit) {
+    return null;
+  }
+
+  registerFontkit(fontkit);
+
+  for (const path of EXPORT_FONT_CANDIDATES) {
+    const fontBytes = await loadFontBytes(path);
+    if (!fontBytes) {
+      continue;
+    }
+
+    try {
+      return await pdfDoc.embedFont(fontBytes, { subset: true });
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+};
+
+const canEncodeWithFont = (font: any, text: string) => {
+  if (!font) {
+    return false;
+  }
+
+  try {
+    font.encodeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const toCanvasColor = (color: RgbColor | null, fallback: RgbColor) => {
   const target = color ?? fallback;
   return `rgb(${Math.round(target.r * 255)}, ${Math.round(target.g * 255)}, ${Math.round(target.b * 255)})`;
 };
 
-const drawTextWithFallback = async ({
+const drawTextAsPng = async ({
   pdfDoc,
   page,
   text,
@@ -203,7 +274,6 @@ const drawTextWithFallback = async ({
   y,
   size,
   color,
-  font,
 }: {
   pdfDoc: PDFDocument;
   page: any;
@@ -212,25 +282,8 @@ const drawTextWithFallback = async ({
   y: number;
   size: number;
   color: RgbColor | null;
-  font: any;
 }) => {
   const fallbackColor = { r: 0.07, g: 0.09, b: 0.12 };
-
-  try {
-    page.drawText(text, {
-      x,
-      y,
-      size,
-      color: toPdfColor(color, fallbackColor),
-      font,
-    });
-    return;
-  } catch (error) {
-    if (!isWinAnsiEncodeError(error)) {
-      throw error;
-    }
-  }
-
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
   if (!context) {
@@ -251,7 +304,9 @@ const drawTextWithFallback = async ({
   context.textBaseline = "alphabetic";
   context.fillText(text, 0, size);
 
-  const imageBytes = await canvasToPngBytes(canvas);
+  const dataUrl = canvas.toDataURL("image/png");
+  const response = await fetch(dataUrl);
+  const imageBytes = new Uint8Array(await response.arrayBuffer());
   const image = await pdfDoc.embedPng(imageBytes);
   page.drawImage(image, {
     x,
@@ -261,10 +316,69 @@ const drawTextWithFallback = async ({
   });
 };
 
-const canvasToPngBytes = async (canvas: HTMLCanvasElement) => {
-  const dataUrl = canvas.toDataURL("image/png");
-  const response = await fetch(dataUrl);
-  return new Uint8Array(await response.arrayBuffer());
+const drawTextWithFallback = async ({
+  pdfDoc,
+  page,
+  text,
+  x,
+  y,
+  size,
+  color,
+  primaryFont,
+  customFont,
+}: {
+  pdfDoc: PDFDocument;
+  page: any;
+  text: string;
+  x: number;
+  y: number;
+  size: number;
+  color: RgbColor | null;
+  primaryFont: any;
+  customFont: any;
+}) => {
+  const fallbackColor = { r: 0.07, g: 0.09, b: 0.12 };
+
+  const preferredFonts = [customFont, primaryFont].filter(Boolean);
+  for (const font of preferredFonts) {
+    if (!canEncodeWithFont(font, text)) {
+      continue;
+    }
+
+    page.drawText(text, {
+      x,
+      y,
+      size,
+      color: toPdfColor(color, fallbackColor),
+      font,
+    });
+    return;
+  }
+
+  try {
+    page.drawText(text, {
+      x,
+      y,
+      size,
+      color: toPdfColor(color, fallbackColor),
+      font: primaryFont,
+    });
+    return;
+  } catch (error) {
+    if (!isWinAnsiEncodeError(error)) {
+      throw error;
+    }
+  }
+
+  await drawTextAsPng({
+    pdfDoc,
+    page,
+    text,
+    x,
+    y,
+    size,
+    color,
+  });
 };
 
 export const exportHtmlToPdf = async ({
@@ -295,6 +409,7 @@ export const exportHtmlToPdf = async ({
   const overlayXRatio = pdfPageWidth / (layerWidth || 1);
   const overlayYRatio = pdfPageHeight / (layerHeight || 1);
   const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const customFont = await getCustomFont(pdfDoc);
 
   const textNodes = Array.from(
     textLayer.querySelectorAll<HTMLElement>(
@@ -359,7 +474,8 @@ export const exportHtmlToPdf = async ({
         y,
         size: fontSize,
         color,
-        font: helvetica,
+        primaryFont: helvetica,
+        customFont,
       });
     }
   }
@@ -397,7 +513,8 @@ export const exportHtmlToPdf = async ({
         y,
         size,
         color,
-        font: helvetica,
+        primaryFont: helvetica,
+        customFont,
       });
     }
   }
@@ -443,7 +560,8 @@ export const exportHtmlToPdf = async ({
         y,
         size: fontSize,
         color,
-        font: helvetica,
+        primaryFont: helvetica,
+        customFont,
       });
     }
   }
