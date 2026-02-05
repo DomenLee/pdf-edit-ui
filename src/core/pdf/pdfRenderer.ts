@@ -51,6 +51,10 @@ const cmykToRgb = (c: number, m: number, y: number, k: number): RgbColor => ({
   b: clamp(1 - Math.min(1, y + k)),
 });
 
+const TEMPLATE_RED = "#b00000";
+const DATA_BLACK = "#000000";
+const SECONDARY_GRAY = "#666666";
+
 
 const INVOICE_LABEL_HINTS = [
   "发票",
@@ -144,6 +148,18 @@ const sampleColorAtPoint = (
 const normalizeRotation = (rotation: number) => {
   const normalized = ((rotation % 360) + 360) % 360;
   return normalized;
+};
+
+const detectInvoicePDF = (textContent: any) => {
+  const normalizedText = String(
+    textContent?.items?.map((item: any) => item?.str ?? "").join(" ") ?? "",
+  ).toLowerCase();
+  return normalizedText.includes("发票") && (
+    normalizedText.includes("代码") ||
+    normalizedText.includes("号码") ||
+    normalizedText.includes("tax") ||
+    normalizedText.includes("invoice")
+  );
 };
 
 export const loadPdfPage = async (data: ArrayBuffer, pageNumber = 1) => {
@@ -255,6 +271,8 @@ export const renderTextLayerForPage = async (
     await task.promise;
   }
 
+  const isInvoicePDF = detectInvoicePDF(textContent);
+
   const COVER_SCALE = 1.01;
   const containerRect = container.getBoundingClientRect();
 
@@ -272,6 +290,17 @@ export const renderTextLayerForPage = async (
 
     const textRole = isLikelyDataText(textDiv.textContent ?? "") ? "data" : "template";
     textDiv.dataset.textRole = textRole;
+
+    if (isInvoicePDF) {
+      const templateColor = textRole === "template"
+        ? TEMPLATE_RED
+        : textRole === "data"
+          ? DATA_BLACK
+          : SECONDARY_GRAY;
+      textDiv.style.color = templateColor;
+      textDiv.style.caretColor = templateColor;
+      return;
+    }
 
     if (!colorSourceContext) {
       return;
