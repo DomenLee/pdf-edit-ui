@@ -56,14 +56,14 @@ body {
   max-width: min(95vw, 860px);
 }
 
-.canvas-layer {
+.pdf-canvas-layer {
   @apply absolute left-0 top-0 z-10;
 }
 
 .pdf-text-layer {
   @apply absolute left-0 top-0 z-20;
   pointer-events: auto;
-  user-select: none;
+  user-select: text;
 }
 
 .pdf-text-layer span {
@@ -79,11 +79,6 @@ body {
 .pdf-text-layer span.is-editing {
   user-select: text;
   outline: none;
-}
-
-.pdf-path-layer {
-  @apply absolute left-0 top-0 z-10;
-  pointer-events: none;
 }
 
 .canvas-layer [contenteditable][data-placeholder]:empty:before {

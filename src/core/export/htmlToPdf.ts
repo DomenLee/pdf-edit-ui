@@ -4,7 +4,7 @@ import type { OverlayObject } from "../../overlay/objects/types";
 type HtmlToPdfOptions = {
   filename: string;
   textLayer: HTMLDivElement;
-  pathLayer: HTMLDivElement;
+  pageCanvas: HTMLCanvasElement;
   viewportScale: number;
   overlays?: OverlayObject[];
 };
@@ -65,121 +65,10 @@ const triggerDownload = (bytes: Uint8Array, filename: string) => {
   URL.revokeObjectURL(url);
 };
 
-const format = (value: number) => Number(value.toFixed(3));
-
-const convertPathToPdf = (d: string, pageHeight: number, scale: number) => {
-  const tokenRegex = /([MLCQHVZmlcqhvz])|(-?\d*\.?\d+(?:e[-+]?\d+)?)/g;
-  const tokens: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = tokenRegex.exec(d)) !== null) {
-    tokens.push(match[0]);
-  }
-
-  let index = 0;
-  let currentX = 0;
-  let currentY = 0;
-  let currentCmd = "";
-  const output: string[] = [];
-
-  const nextNumber = () => {
-    const token = tokens[index];
-    index += 1;
-    return Number.parseFloat(token);
-  };
-
-  while (index < tokens.length) {
-    const token = tokens[index];
-    if (/^[MLCQHVZmlcqhvz]$/.test(token)) {
-      currentCmd = token;
-      index += 1;
-      if (currentCmd === "Z" || currentCmd === "z") {
-        output.push("Z");
-      }
-      continue;
-    }
-
-    switch (currentCmd) {
-      case "M":
-      case "L": {
-        const x = nextNumber();
-        const y = nextNumber();
-        currentX = x;
-        currentY = y;
-        output.push(
-          `${currentCmd} ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`,
-        );
-        break;
-      }
-      case "m":
-      case "l": {
-        const dx = nextNumber();
-        const dy = nextNumber();
-        currentX += dx;
-        currentY += dy;
-        output.push(
-          `${currentCmd.toUpperCase()} ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`,
-        );
-        break;
-      }
-      case "H": {
-        currentX = nextNumber();
-        output.push(`L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`);
-        break;
-      }
-      case "h": {
-        currentX += nextNumber();
-        output.push(`L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`);
-        break;
-      }
-      case "V": {
-        currentY = nextNumber();
-        output.push(`L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`);
-        break;
-      }
-      case "v": {
-        currentY += nextNumber();
-        output.push(`L ${format(currentX / scale)} ${format((pageHeight - currentY) / scale)}`);
-        break;
-      }
-      case "C": {
-        const x1 = nextNumber();
-        const y1 = nextNumber();
-        const x2 = nextNumber();
-        const y2 = nextNumber();
-        const x = nextNumber();
-        const y = nextNumber();
-        currentX = x;
-        currentY = y;
-        output.push(
-          `C ${format(x1 / scale)} ${format((pageHeight - y1) / scale)} ${format(x2 / scale)} ${format((pageHeight - y2) / scale)} ${format(x / scale)} ${format((pageHeight - y) / scale)}`,
-        );
-        break;
-      }
-      case "Q": {
-        const x1 = nextNumber();
-        const y1 = nextNumber();
-        const x = nextNumber();
-        const y = nextNumber();
-        currentX = x;
-        currentY = y;
-        output.push(
-          `Q ${format(x1 / scale)} ${format((pageHeight - y1) / scale)} ${format(x / scale)} ${format((pageHeight - y) / scale)}`,
-        );
-        break;
-      }
-      default:
-        index += 1;
-        break;
-    }
-  }
-
-  return output.join(" ");
-};
-
 export const exportHtmlToPdf = async ({
   filename,
   textLayer,
-  pathLayer,
+  pageCanvas,
   viewportScale,
   overlays = [],
 }: HtmlToPdfOptions) => {
@@ -192,26 +81,11 @@ export const exportHtmlToPdf = async ({
   const page = pdfDoc.addPage([pageWidth, pageHeight]);
   const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-  const svgPaths = Array.from(pathLayer.querySelectorAll("path"));
-  svgPaths.forEach((pathEl) => {
-    const originalPath = pathEl.getAttribute("d") ?? "";
-    if (!originalPath.trim()) {
-      return;
-    }
-
-    const pdfPath = convertPathToPdf(originalPath, pageRect.height, scale);
-    const strokeWidthValue = Number.parseFloat(pathEl.getAttribute("stroke-width") ?? "1");
-    const strokeWidth = Number.isFinite(strokeWidthValue) ? strokeWidthValue / scale : 1;
-
-    const fill = parseColor(pathEl.getAttribute("fill"));
-    const stroke = parseColor(pathEl.getAttribute("stroke"));
-
-    page.drawSvgPath(pdfPath, {
-      color: fill ? toPdfColor(fill, { r: 0, g: 0, b: 0 }) : undefined,
-      borderColor: stroke ? toPdfColor(stroke, { r: 0, g: 0, b: 0 }) : undefined,
-      borderWidth: strokeWidth,
-    });
-  });
+  const pngBytes = await fetch(pageCanvas.toDataURL("image/png")).then((response) =>
+    response.arrayBuffer(),
+  );
+  const pngImage = await (pdfDoc as any).embedPng(pngBytes);
+  (page as any).drawImage(pngImage, { x: 0, y: 0, width: pageWidth, height: pageHeight });
 
   const textNodes = Array.from(textLayer.querySelectorAll("span, div"));
   textNodes.forEach((node) => {

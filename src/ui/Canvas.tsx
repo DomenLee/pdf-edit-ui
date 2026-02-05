@@ -2,8 +2,8 @@ import { RefObject, useEffect, useState } from "react";
 import { cn } from "../components/ui/utils";
 
 type CanvasProps = {
+  pageCanvasRef: RefObject<HTMLCanvasElement>;
   textLayerRef: RefObject<HTMLDivElement>;
-  pathLayerRef: RefObject<HTMLDivElement>;
   status: string;
   width: number;
   height: number;
@@ -12,8 +12,8 @@ type CanvasProps = {
 };
 
 export const Canvas = ({
+  pageCanvasRef,
   textLayerRef,
-  pathLayerRef,
   status,
   width,
   height,
@@ -32,7 +32,7 @@ export const Canvas = ({
     <section className="canvas-stage">
       <div className="pdf-status">{status}</div>
       <div
-        className="pdf-page-shell"
+        className="pdf-page-shell page-root"
         style={{
           width,
           height,
@@ -47,9 +47,9 @@ export const Canvas = ({
         >
           {zoomPercent}%
         </div>
-        <div
-          ref={pathLayerRef}
-          className="pdf-path-layer"
+        <canvas
+          ref={pageCanvasRef}
+          className="pdf-canvas-layer"
           style={{ width, height }}
         />
         <div

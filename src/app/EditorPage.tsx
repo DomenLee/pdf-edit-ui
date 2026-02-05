@@ -4,7 +4,7 @@ import { getOverlays, getPdfById, saveOverlays } from "../storage/pdfStorage";
 import {
   getPageViewport,
   loadPdfPage,
-  renderPathLayerForPage,
+  renderPage,
   renderTextLayerForPage,
 } from "../core/pdf/pdfRenderer";
 import { Canvas } from "../ui/Canvas";
@@ -15,8 +15,8 @@ import { exportHtmlToPdf } from "../core/export/htmlToPdf";
 
 export const EditorPage = () => {
   const { id } = useParams();
+  const pageCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
-  const pathLayerRef = useRef<HTMLDivElement | null>(null);
   const [statusKey, setStatusKey] = useState("editor.status.loading");
   const [pageSize, setPageSize] = useState({ width: 0, height: 0, scale: 1 });
   const [zoomScale, setZoomScale] = useState(1);
@@ -47,7 +47,7 @@ export const EditorPage = () => {
         return;
       }
 
-      if (!textLayerRef.current || !pathLayerRef.current) {
+      if (!textLayerRef.current || !pageCanvasRef.current) {
         setStatusKey("editor.status.canvasNotReady");
         requestAnimationFrame(() => {
           if (!cancelled) {
@@ -68,17 +68,8 @@ export const EditorPage = () => {
         const scale = 1.1;
         const viewport = getPageViewport(page, scale);
         setPageSize({ width: viewport.width, height: viewport.height, scale });
+        await renderPage(page, pageCanvasRef.current, scale);
         await renderTextLayerForPage(page, textLayerRef.current, scale);
-        await renderPathLayerForPage(page, pathLayerRef.current, scale);
-        const spans = textLayerRef.current.querySelectorAll("span");
-        spans.forEach((span, index) => {
-          span.dataset.textId = span.dataset.textId ?? `text-${index}`;
-          span.dataset.pageIndex = "0";
-          if (!span.dataset.originalText) {
-            span.dataset.originalText = span.textContent ?? "";
-          }
-          span.contentEditable = "true";
-        });
         const overlayEntry = await getOverlays(documentId);
         if (overlayEntry) {
           const normalized = overlayEntry.overlays.map((overlay) => {
@@ -134,15 +125,15 @@ export const EditorPage = () => {
       return;
     }
     const textLayer = textLayerRef.current;
-    const pathLayer = pathLayerRef.current;
-    if (!textLayer || !pathLayer) {
+    const pageCanvas = pageCanvasRef.current;
+    if (!textLayer || !pageCanvas) {
       return;
     }
 
     await exportHtmlToPdf({
       filename: `${documentId}-edited.pdf`,
       textLayer,
-      pathLayer,
+      pageCanvas,
       viewportScale: pageSize.scale || 1,
       overlays,
     });
@@ -205,8 +196,8 @@ export const EditorPage = () => {
         />
         <div className="editor-body">
           <Canvas
+            pageCanvasRef={pageCanvasRef}
             textLayerRef={textLayerRef}
-            pathLayerRef={pathLayerRef}
             status={t(statusKey)}
             width={pageSize.width}
             height={pageSize.height}

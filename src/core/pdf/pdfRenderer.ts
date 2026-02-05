@@ -1,7 +1,6 @@
 import {
   getDocument,
   GlobalWorkerOptions,
-  renderTextLayer,
   OPS,
   type PDFPageProxy,
 } from "pdfjs-dist";
@@ -88,7 +87,41 @@ export const renderPage = async (
 
   canvas.width = viewport.width;
   canvas.height = viewport.height;
-  await page.render({ canvasContext: context, viewport }).promise;
+  const operatorList = await (page as any).getOperatorList();
+  const fnArray: number[] = operatorList?.fnArray ?? [];
+  const textRenderingOps = new Set<number>([
+    (OPS as any).beginText,
+    (OPS as any).endText,
+    (OPS as any).setFont,
+    (OPS as any).setTextMatrix,
+    (OPS as any).setTextRise,
+    (OPS as any).setWordSpacing,
+    (OPS as any).setCharSpacing,
+    (OPS as any).setTextRenderingMode,
+    (OPS as any).setTextLeading,
+    (OPS as any).moveText,
+    (OPS as any).setHScale,
+    (OPS as any).nextLine,
+    (OPS as any).showText,
+    (OPS as any).showSpacedText,
+    (OPS as any).nextLineShowText,
+    (OPS as any).nextLineSetSpacingShowText,
+    (OPS as any).setLeadingMoveText,
+  ]);
+
+  await page
+    .render({
+      canvasContext: context,
+      viewport,
+      operationsFilter: (index: number) => {
+        const fn = fnArray[index];
+        if (!Number.isFinite(fn)) {
+          return true;
+        }
+        return !textRenderingOps.has(fn);
+      },
+    } as any)
+    .promise;
   return { width: viewport.width, height: viewport.height, scale };
 };
 
@@ -98,22 +131,36 @@ export const renderTextLayerForPage = async (
   scale = 1.2,
 ) => {
   const viewport = getPageViewport(page, scale);
+  const viewportTransform = (viewport as any).transform as Matrix;
   container.innerHTML = "";
-  container.style.setProperty("--scale-factor", `${viewport.scale}`);
   container.style.width = `${viewport.width}px`;
   container.style.height = `${viewport.height}px`;
   const textContent = await (page as any).getTextContent();
-  const textDivs: HTMLElement[] = [];
-  const task = renderTextLayer({
-    textContentSource: textContent,
-    container,
-    viewport,
-    textDivs,
-    enhanceTextSelection: false,
+
+  (textContent.items ?? []).forEach((item: any, index: number) => {
+    if (!item?.str) {
+      return;
+    }
+
+    const span = document.createElement("span");
+    const tx = multiplyMatrix(viewportTransform, item.transform as Matrix);
+
+    const fontHeight = Math.hypot(tx[2], tx[3]);
+    const angle = Math.atan2(tx[1], tx[0]);
+
+    span.textContent = item.str;
+    span.dataset.textId = `text-${index}`;
+    span.dataset.pageIndex = "0";
+    span.dataset.originalText = item.str;
+    span.contentEditable = "true";
+    span.style.left = `${tx[4]}px`;
+    span.style.top = `${tx[5]}px`;
+    span.style.fontSize = `${fontHeight}px`;
+    span.style.transform = `rotate(${angle}rad) translateY(-100%)`;
+    span.style.fontFamily = item.fontName ?? "sans-serif";
+
+    container.appendChild(span);
   });
-  if (task?.promise) {
-    await task.promise;
-  }
 };
 
 const buildSvgPathElement = (
