@@ -154,42 +154,42 @@ export const EditorPage = () => {
       textLayer.querySelectorAll<HTMLElement>('span[data-text-role="data"], div[data-text-role="data"]'),
     );
 
-    return nodes
-      .map((node, index) => {
-        const originalText = node.dataset.originalText ?? "";
-        const replacementText = node.textContent ?? "";
-        if (replacementText === originalText) {
-          return null;
-        }
+    return nodes.reduce<EditedTextItem[]>((items, node, index) => {
+      const originalText = node.dataset.originalText ?? "";
+      const replacementText = node.textContent ?? "";
+      if (replacementText === originalText) {
+        return items;
+      }
 
-        const rect = node.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) {
-          return null;
-        }
+      const rect = node.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        return items;
+      }
 
-        const styles = window.getComputedStyle(node);
-        const fontSizePx = Number.parseFloat(styles.fontSize || "12");
-        const fontSize = Number.isFinite(fontSizePx)
-          ? fontSizePx / effectiveScale
-          : undefined;
-        const x = (rect.left - pageRect.left) / effectiveScale;
-        const y = (pageRect.height - (rect.top - pageRect.top + rect.height)) / effectiveScale;
+      const styles = window.getComputedStyle(node);
+      const fontSizePx = Number.parseFloat(styles.fontSize || "12");
+      const fontSize = Number.isFinite(fontSizePx)
+        ? fontSizePx / effectiveScale
+        : undefined;
+      const x = (rect.left - pageRect.left) / effectiveScale;
+      const y = (pageRect.height - (rect.top - pageRect.top + rect.height)) / effectiveScale;
 
-        return {
-          id: node.dataset.textId ?? `text-${index}`,
-          pageIndex: 0,
-          originalText,
-          replacementText,
-          bbox: {
-            x,
-            y,
-            width: rect.width / effectiveScale,
-            height: rect.height / effectiveScale,
-          },
-          fontSize,
-        };
-      })
-      .filter((item): item is EditedTextItem => Boolean(item));
+      const item: EditedTextItem = {
+        id: node.dataset.textId ?? `text-${index}`,
+        pageIndex: 0,
+        originalText,
+        replacementText,
+        bbox: {
+          x,
+          y,
+          width: rect.width / effectiveScale,
+          height: rect.height / effectiveScale,
+        },
+        ...(fontSize ? { fontSize } : {}),
+      };
+      items.push(item);
+      return items;
+    }, []);
   };
 
   const normalizeOverlaysForExport = (
