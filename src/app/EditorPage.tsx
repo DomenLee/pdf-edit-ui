@@ -14,7 +14,8 @@ import { Canvas } from "../ui/Canvas";
 import { Toolbar } from "../ui/Toolbar";
 import { useOverlayStore } from "../state/overlayStore";
 import { useI18nStore } from "../i18n/i18nStore";
-import { exportHtmlToPdf } from "../core/export/htmlToPdf";
+import { exportPdf } from "../core/export/pdfExport";
+import { EditedTextItem, OverlayObject } from "../overlay/objects/types";
 
 export const EditorPage = () => {
   const { id } = useParams();
@@ -142,22 +143,107 @@ export const EditorPage = () => {
     void saveOverlays(documentId, overlays, []);
   }, [documentId, overlays, setDocumentId]);
 
+  const collectEditedTextItems = (
+    textLayer: HTMLDivElement,
+    viewportScale: number,
+    currentZoom: number,
+  ): EditedTextItem[] => {
+    const effectiveScale = viewportScale * (currentZoom || 1);
+    const pageRect = textLayer.getBoundingClientRect();
+    const nodes = Array.from(
+      textLayer.querySelectorAll<HTMLElement>('span[data-text-role="data"], div[data-text-role="data"]'),
+    );
+
+    return nodes
+      .map((node, index) => {
+        const originalText = node.dataset.originalText ?? "";
+        const replacementText = node.textContent ?? "";
+        if (replacementText === originalText) {
+          return null;
+        }
+
+        const rect = node.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) {
+          return null;
+        }
+
+        const styles = window.getComputedStyle(node);
+        const fontSizePx = Number.parseFloat(styles.fontSize || "12");
+        const fontSize = Number.isFinite(fontSizePx)
+          ? fontSizePx / effectiveScale
+          : undefined;
+        const x = (rect.left - pageRect.left) / effectiveScale;
+        const y = (pageRect.height - (rect.top - pageRect.top + rect.height)) / effectiveScale;
+
+        return {
+          id: node.dataset.textId ?? `text-${index}`,
+          pageIndex: 0,
+          originalText,
+          replacementText,
+          bbox: {
+            x,
+            y,
+            width: rect.width / effectiveScale,
+            height: rect.height / effectiveScale,
+          },
+          fontSize,
+        };
+      })
+      .filter((item): item is EditedTextItem => Boolean(item));
+  };
+
+  const normalizeOverlaysForExport = (
+    items: OverlayObject[],
+    viewportScale: number,
+  ) =>
+    items.map((overlay) => {
+      const scale = viewportScale || 1;
+      return {
+        ...overlay,
+        x: overlay.x / scale,
+        y: overlay.y / scale,
+        width: overlay.width / scale,
+        height: overlay.height / scale,
+        style: overlay.style
+          ? {
+              ...overlay.style,
+              fontSize: overlay.style.fontSize
+                ? overlay.style.fontSize / scale
+                : overlay.style.fontSize,
+            }
+          : overlay.style,
+      };
+    });
+
   const handleExport = async () => {
     if (!documentId) {
       return;
     }
     const textLayer = textLayerRef.current;
-    const pathLayer = pathLayerRef.current;
-    if (!textLayer || !pathLayer) {
+    if (!textLayer) {
+      return;
+    }
+    const entry = await getPdfById(documentId);
+    if (!entry) {
       return;
     }
 
-    await exportHtmlToPdf({
-      filename: `${documentId}-edited.pdf`,
+    const viewportScale = pageSize.scale || 1;
+    const editedTextItems = collectEditedTextItems(
       textLayer,
-      pathLayer,
-      viewportScale: pageSize.scale || 1,
+      viewportScale,
+      zoomScale,
+    );
+    const normalizedOverlays = normalizeOverlaysForExport(
       overlays,
+      viewportScale,
+    );
+
+    await exportPdf({
+      filename: `${documentId}-edited.pdf`,
+      data: entry.data,
+      overlays: normalizedOverlays,
+      editedTextItems,
     });
   };
 
