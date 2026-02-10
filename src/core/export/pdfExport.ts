@@ -68,6 +68,14 @@ export const exportPdf = async ({
       if (!text) {
         return;
       }
+      page.drawRectangle({
+        x: item.bbox.x,
+        y: item.bbox.y,
+        width: item.bbox.width,
+        height: item.bbox.height,
+        color: rgb(1, 1, 1),
+        opacity: 1,
+      });
       page.drawText(text, {
         x: item.bbox.x,
         y: item.bbox.y,
